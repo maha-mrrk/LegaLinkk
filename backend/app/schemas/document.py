@@ -21,6 +21,10 @@ class DocumentResponse(BaseModel):
     file_size: int = Field(description="File size in bytes")
     upload_date: datetime
     status: DocumentStatus
+    page_count: int | None = Field(
+        default=None,
+        description="Number of pages detected during text extraction",
+    )
 
 
 class DocumentListResponse(BaseModel):

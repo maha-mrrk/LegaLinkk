@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, String, func
+from sqlalchemy import BigInteger, DateTime, Enum, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,9 +50,11 @@ class Document(Base):
         default=DocumentStatus.UPLOADED,
         server_default=DocumentStatus.UPLOADED.value,
     )
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     def __repr__(self) -> str:
         return (
             f"<Document id={self.id} original_filename={self.original_filename!r} "
-            f"status={self.status.value}>"
+            f"status={self.status.value} page_count={self.page_count}>"
         )

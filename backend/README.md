@@ -2,7 +2,8 @@
 
 FastAPI backend for **LegalLink** — an AI-powered platform for analysing legal contracts and regulatory documents.
 
-This repository step provides a production-ready API skeleton only. AI / RAG / OCR / Celery / Redis are intentionally out of scope.
+This repository currently includes the FastAPI infrastructure and the Document Management module.
+AI / RAG / OCR / Celery / Redis are intentionally out of scope for later increments.
 
 ## Stack
 
@@ -33,6 +34,7 @@ backend/
 │   ├── services/         # Business logic
 │   ├── utils/            # Shared helpers
 │   └── main.py           # Application factory
+├── storage/documents/    # Local PDF storage
 ├── alembic/              # Database migrations
 ├── tests/
 ├── Dockerfile
@@ -56,6 +58,9 @@ cp backend/.env.example backend/.env
 
 # 2. Start PostgreSQL + API
 docker compose up --build
+
+# 3. Apply database migrations
+docker compose exec backend poetry run alembic upgrade head
 ```
 
 Services:
@@ -98,6 +103,28 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `POSTGRES_HOST` | Database host | `localhost` |
 | `POSTGRES_PORT` | Database port | `5432` |
 | `POSTGRES_DB` | Database name | `legallink` |
+
+## Document Management API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/documents` | Upload a PDF (`multipart/form-data`, field `file`) |
+| `GET` | `/api/v1/documents` | List documents |
+| `GET` | `/api/v1/documents/{id}` | Get document metadata |
+| `DELETE` | `/api/v1/documents/{id}` | Delete document + stored file |
+
+Validation rules:
+
+- Only PDF files (extension + MIME + `%PDF` magic bytes)
+- Maximum size: 25 MB
+- Files stored under `storage/documents/` with a UUID filename
+- After upload, text is extracted with PyMuPDF and stored in PostgreSQL (`extracted_text`, `page_count`)
+
+Example upload:
+
+```bash
+curl -F "file=@./contract.pdf;type=application/pdf" http://localhost:8000/api/v1/documents
+```
 
 ## Database migrations
 
