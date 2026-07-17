@@ -30,11 +30,23 @@ docker compose up --build
 | API docs (Swagger) | http://localhost:8000/docs |
 | Health check | http://localhost:8000/api/v1/health |
 
+## Frontend
+
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
+
+UI: http://localhost:5173 (login → dashboard). See [`frontend/README.md`](frontend/README.md).
+
 ## Repository layout
 
 ```
 legaLink/
 ├── backend/           # FastAPI application
+├── frontend/          # React + Vite UI (mockup)
 ├── docker-compose.yml # PostgreSQL + backend
 └── README.md
 ```

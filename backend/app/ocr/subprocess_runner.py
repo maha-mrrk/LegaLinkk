@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from app.core.logging import get_logger
-from app.ocr import OcrDocumentResult, OcrError
+from app.ocr import OcrDocumentResult, OcrError, OcrPageResult
 
 logger = get_logger(__name__)
 
@@ -117,8 +117,24 @@ def run_paddle_ocr_subprocess(
         if not payload.get("ok"):
             raise OcrError(payload.get("error") or "OCR subprocess failed")
 
+        pages_raw = payload.get("pages") or []
+        pages: list[OcrPageResult] = []
+        if isinstance(pages_raw, list):
+            for item in pages_raw:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    pages.append(
+                        OcrPageResult(
+                            page_number=int(item.get("page_number") or 0),
+                            text=str(item.get("text") or ""),
+                        )
+                    )
+                except (TypeError, ValueError):
+                    continue
+
         return OcrDocumentResult(
             text=str(payload.get("text") or ""),
             page_count=int(payload.get("page_count") or 0),
-            pages=(),
+            pages=tuple(pages),
         )

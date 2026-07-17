@@ -1,6 +1,5 @@
 """Business logic for document upload, retrieval, and deletion."""
 
-import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -10,32 +9,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.exceptions import NotFoundError, PayloadTooLargeError, ValidationError
 from app.core.logging import get_logger
-from app.models.document import Document, DocumentStatus, ExtractionMethod
-from app.parsers.extraction_pipeline import ExtractionError, ExtractionPipeline
+from app.models.document import Document, DocumentStatus
 from app.repositories.document import DocumentRepository
+from app.services.document_processing import (
+    DocumentProcessingError,
+    DocumentProcessingService,
+)
 from app.utils.storage import DocumentStorage, is_pdf_content
 
 logger = get_logger(__name__)
 
 
 class DocumentService:
-    """Orchestrates validation, storage, extraction, and persistence."""
+    """Orchestrates validation, storage, preprocessing, and persistence."""
 
     def __init__(
         self,
         session: AsyncSession,
         settings: Settings | None = None,
         storage: DocumentStorage | None = None,
-        pipeline: ExtractionPipeline | None = None,
+        processing_service: DocumentProcessingService | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._repo = DocumentRepository(session)
         self._session = session
         self._storage = storage or DocumentStorage(self._settings)
-        self._pipeline = pipeline or ExtractionPipeline(settings=self._settings)
+        self._processing = processing_service or DocumentProcessingService(
+            session, settings=self._settings
+        )
 
     async def upload(self, file: UploadFile) -> Document:
-        """Validate, store, extract text (digital or OCR), and persist metadata."""
+        """Validate, store, persist as uploaded, then run the preprocessing pipeline."""
         original_filename = self._require_filename(file.filename)
         content = await file.read()
         self._validate_upload(original_filename, file.content_type, content)
@@ -43,42 +47,13 @@ class DocumentService:
         stored_filename = self._storage.build_stored_filename(original_filename)
         saved_path = await self._storage.save(stored_filename, content)
 
-        extracted_text: str | None = None
-        page_count: int | None = None
-        extraction_method: ExtractionMethod | None = None
-        status = DocumentStatus.PROCESSING
-
-        try:
-            # OCR / parsing is CPU-bound — keep the event loop responsive
-            result = await asyncio.to_thread(self._pipeline.extract, str(saved_path))
-            extracted_text = result.text
-            page_count = result.page_count
-            if result.extraction_method:
-                extraction_method = ExtractionMethod(result.extraction_method)
-            status = DocumentStatus.COMPLETED
-            logger.info(
-                "Extraction finished for %s via %s (%s pages, %s characters)",
-                saved_path,
-                result.extraction_method,
-                page_count,
-                len(extracted_text or ""),
-            )
-        except (ExtractionError, ValueError):
-            status = DocumentStatus.FAILED
-            # Scanned path selected OCR; keep that method even when OCR crashes.
-            extraction_method = ExtractionMethod.PADDLE_OCR
-            logger.exception("Text extraction pipeline failed for %s", saved_path)
-
         document = Document(
             original_filename=original_filename,
             stored_filename=stored_filename,
             file_path=str(saved_path),
             mime_type="application/pdf",
             file_size=len(content),
-            status=status,
-            extracted_text=extracted_text,
-            page_count=page_count,
-            extraction_method=extraction_method,
+            status=DocumentStatus.UPLOADED,
         )
 
         try:
@@ -88,20 +63,35 @@ class DocumentService:
         except Exception:
             await self._session.rollback()
             await self._storage.delete(stored_filename)
-            logger.exception("Failed to persist document metadata for %s", original_filename)
+            logger.exception(
+                "Failed to persist document metadata for %s", original_filename
+            )
             raise
 
         logger.info(
-            "Document uploaded id=%s filename=%s status=%s pages=%s method=%s",
+            "Document uploaded id=%s filename=%s status=%s",
             document.id,
             original_filename,
             document.status.value,
-            document.page_count,
-            document.extraction_method,
         )
+
+        try:
+            document = await self._processing.process_document(document.id)
+        except (DocumentProcessingError, Exception):
+            # Processing service already marks FAILED and commits.
+            logger.exception(
+                "Automatic preprocessing failed for document_id=%s", document.id
+            )
+            failed = await self._repo.get_by_id(document.id)
+            if failed is not None:
+                return failed
+            raise
+
         return document
 
-    async def list_documents(self, *, skip: int = 0, limit: int = 100) -> tuple[list[Document], int]:
+    async def list_documents(
+        self, *, skip: int = 0, limit: int = 100
+    ) -> tuple[list[Document], int]:
         documents = await self._repo.list_all(skip=skip, limit=limit)
         total = await self._repo.count()
         return documents, total

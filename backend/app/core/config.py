@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     ocr_min_chars_per_page: int = 30
     ocr_render_scale: float = 2.0
 
+    # Chunking (RAG preprocessing)
+    chunk_size: int = 900
+    chunk_overlap: int = 175
+
+
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024

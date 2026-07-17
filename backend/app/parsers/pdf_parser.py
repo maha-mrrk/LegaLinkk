@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz
 
 from app.core.logging import get_logger
-from app.parsers import DocumentParser, PdfParseError, TextExtractionResult
+from app.parsers import DocumentParser, PageText, PdfParseError, TextExtractionResult
 
 logger = get_logger(__name__)
 
@@ -39,27 +39,33 @@ class PdfParser(DocumentParser):
 
         try:
             page_count = document.page_count
-            page_texts: list[str] = []
+            pages: list[PageText] = []
 
             for page_index in range(page_count):
+                page_number = page_index + 1
                 try:
                     page = document.load_page(page_index)
-                    page_texts.append(page.get_text("text"))
+                    page_text = page.get_text("text") or ""
                 except Exception:
                     logger.exception(
                         "Failed to extract text from page %s of %s",
-                        page_index + 1,
+                        page_number,
                         file_path,
                     )
-                    page_texts.append("")
+                    page_text = ""
+                pages.append(PageText(page_number=page_number, text=page_text))
 
-            text = "\n".join(page_texts).strip()
+            text = "\n".join(page.text for page in pages).strip()
             logger.info(
                 "Extracted text from %s (%s pages, %s characters)",
                 file_path,
                 page_count,
                 len(text),
             )
-            return TextExtractionResult(text=text, page_count=page_count)
+            return TextExtractionResult(
+                text=text,
+                page_count=page_count,
+                pages=tuple(pages),
+            )
         finally:
             document.close()

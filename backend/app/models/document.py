@@ -3,12 +3,16 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, Enum, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.chunk import DocumentChunk
 
 
 class DocumentStatus(str, enum.Enum):
@@ -16,8 +20,11 @@ class DocumentStatus(str, enum.Enum):
 
     UPLOADED = "uploaded"
     PROCESSING = "processing"
-    COMPLETED = "completed"
+    PROCESSED = "processed"
     FAILED = "failed"
+
+    # Legacy alias kept for reading older rows until migration remaps them.
+    COMPLETED = "completed"
 
 
 class ExtractionMethod(str, enum.Enum):
@@ -66,6 +73,13 @@ class Document(Base):
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
         ),
         nullable=True,
+    )
+
+    chunks: Mapped[list["DocumentChunk"]] = relationship(
+        "DocumentChunk",
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DocumentChunk.chunk_index",
     )
 
     def __repr__(self) -> str:

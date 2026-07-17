@@ -108,19 +108,26 @@ Copy `.env.example` to `.env` and adjust as needed:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/documents` | Upload a PDF (`multipart/form-data`, field `file`) |
+| `POST` | `/api/v1/documents` | Upload a PDF and run preprocessing (extract → clean → chunk) |
 | `GET` | `/api/v1/documents` | List documents |
 | `GET` | `/api/v1/documents/{id}` | Get document metadata |
-| `DELETE` | `/api/v1/documents/{id}` | Delete document + stored file |
+| `GET` | `/api/v1/documents/{id}/status` | Processing status (`uploaded` / `processing` / `processed` / `failed`) |
+| `GET` | `/api/v1/documents/{id}/chunks` | List semantic chunks for RAG |
+| `DELETE` | `/api/v1/documents/{id}` | Delete document + stored file + chunks |
 
 Validation rules:
 
 - Only PDF files (extension + MIME + `%PDF` magic bytes)
 - Maximum size: 25 MB
 - Files stored under `storage/documents/` with a UUID filename
-- After upload, text is extracted with PyMuPDF and stored in PostgreSQL (`extracted_text`, `page_count`)
-- Scanned PDFs automatically fall back to PaddleOCR (`extraction_method`: `pdf_parser` | `paddle_ocr`)
+- After upload, the preprocessing pipeline runs automatically:
+  1. Extract text (PyMuPDF) or OCR fallback (PaddleOCR)
+  2. Clean / normalize text
+  3. Split into overlapping semantic chunks (~900 chars, ~175 overlap)
+  4. Persist chunks in `document_chunks` with metadata (pages, method, length)
+- Status lifecycle: `uploaded` → `processing` → `processed` | `failed`
 - OCR languages via `OCR_LANG`: `en`, `french`, `arabic`
+- Chunking tuned via `CHUNK_SIZE` / `CHUNK_OVERLAP`
 
 Example upload:
 

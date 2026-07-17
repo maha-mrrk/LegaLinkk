@@ -1,6 +1,7 @@
 """Pydantic schemas for the Document Management module."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,4 +36,60 @@ class DocumentListResponse(BaseModel):
     """Paginated-style list wrapper for documents."""
 
     items: list[DocumentResponse]
+    total: int
+
+
+class DocumentStatusResponse(BaseModel):
+    """Processing lifecycle status for a document."""
+
+    document_id: UUID
+    status: DocumentStatus = Field(
+        description="uploaded | processing | processed | failed"
+    )
+    page_count: int | None = None
+    extraction_method: ExtractionMethod | None = None
+    chunk_count: int = 0
+
+
+class ChunkMetadata(BaseModel):
+    """Structured metadata stored alongside each chunk."""
+
+    document_id: str
+    chunk_index: int
+    page_numbers: list[int] = Field(default_factory=list)
+    chunk_length: int
+    extraction_method: str | None = None
+    created_at: str
+
+
+class DocumentChunkResponse(BaseModel):
+    """Public representation of a document chunk."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    document_id: UUID
+    chunk_index: int
+    text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+    @classmethod
+    def from_chunk(cls, chunk: Any) -> "DocumentChunkResponse":
+        """Map ORM ``metadata_`` attribute onto the public ``metadata`` field."""
+        return cls(
+            id=chunk.id,
+            document_id=chunk.document_id,
+            chunk_index=chunk.chunk_index,
+            text=chunk.text,
+            metadata=dict(chunk.metadata_ or {}),
+            created_at=chunk.created_at,
+        )
+
+
+class DocumentChunkListResponse(BaseModel):
+    """List wrapper for document chunks."""
+
+    document_id: UUID
+    items: list[DocumentChunkResponse]
     total: int

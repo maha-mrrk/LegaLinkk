@@ -5,7 +5,15 @@ the service layer can swap strategies without changing upload workflow code.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True, slots=True)
+class PageText:
+    """Text extracted from a single PDF page (1-based page number)."""
+
+    page_number: int
+    text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +23,7 @@ class TextExtractionResult:
     text: str
     page_count: int
     extraction_method: str | None = None
+    pages: tuple[PageText, ...] = field(default_factory=tuple)
 
 
 class DocumentParser(ABC):

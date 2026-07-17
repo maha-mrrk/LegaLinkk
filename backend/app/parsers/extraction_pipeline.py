@@ -8,7 +8,7 @@ from app.models.document import ExtractionMethod
 from app.ocr import OcrEngine, OcrError
 from app.ocr.paddle_ocr import get_paddle_ocr_engine
 from app.ocr.subprocess_runner import run_paddle_ocr_subprocess
-from app.parsers import DocumentParser, PdfParseError, TextExtractionResult
+from app.parsers import DocumentParser, PageText, PdfParseError, TextExtractionResult
 from app.parsers.pdf_parser import PdfParser
 
 logger = get_logger(__name__)
@@ -72,7 +72,7 @@ class ExtractionPipeline(DocumentParser):
         OCR runs in an isolated subprocess so a native crash (SIGSEGV) cannot
         take down the FastAPI/uvicorn worker.
         """
-        logger.info("Running OCR extraction for %s (isolated subprocess)", file_path)
+        logger.info("OCR started for %s (isolated subprocess)", file_path)
         try:
             if self._ocr_engine is not None:
                 ocr_result = self._ocr_engine.recognize_pdf(
@@ -89,10 +89,21 @@ class ExtractionPipeline(DocumentParser):
             logger.exception("OCR extraction failed for %s", file_path)
             raise ExtractionError(f"OCR extraction failed for {file_path}") from exc
 
+        pages = tuple(
+            PageText(page_number=page.page_number, text=page.text)
+            for page in ocr_result.pages
+        )
+        logger.info(
+            "OCR finished for %s (%s pages, %s characters)",
+            file_path,
+            ocr_result.page_count,
+            len(ocr_result.text or ""),
+        )
         return TextExtractionResult(
             text=ocr_result.text,
             page_count=ocr_result.page_count,
             extraction_method=ExtractionMethod.PADDLE_OCR.value,
+            pages=pages,
         )
 
     def extract_text(self, file_path: str) -> str:
@@ -101,7 +112,7 @@ class ExtractionPipeline(DocumentParser):
 
     def extract(self, file_path: str) -> TextExtractionResult:
         """Try digital extraction, then OCR if the PDF appears scanned."""
-        logger.info("Extraction pipeline started for %s", file_path)
+        logger.info("Parsing started for %s", file_path)
 
         try:
             digital = self._pdf_parser.extract(file_path)
@@ -128,6 +139,7 @@ class ExtractionPipeline(DocumentParser):
                 text=digital.text,
                 page_count=digital.page_count,
                 extraction_method=ExtractionMethod.PDF_PARSER.value,
+                pages=digital.pages,
             )
 
         if not self._settings.ocr_enabled:
@@ -139,6 +151,7 @@ class ExtractionPipeline(DocumentParser):
                 text=digital.text,
                 page_count=digital.page_count,
                 extraction_method=ExtractionMethod.PDF_PARSER.value,
+                pages=digital.pages,
             )
 
         logger.info("PDF classified as scanned — switching to PaddleOCR for %s", file_path)

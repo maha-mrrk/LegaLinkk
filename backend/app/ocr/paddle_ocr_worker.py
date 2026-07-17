@@ -43,6 +43,10 @@ def main() -> int:
                 "ok": True,
                 "text": result.text,
                 "page_count": result.page_count,
+                "pages": [
+                    {"page_number": page.page_number, "text": page.text}
+                    for page in result.pages
+                ],
             },
             args.output_json,
         )
