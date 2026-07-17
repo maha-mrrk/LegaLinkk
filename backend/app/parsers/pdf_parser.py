@@ -15,8 +15,8 @@ logger = get_logger(__name__)
 class PdfParser(DocumentParser):
     """Extract text from digital PDFs using PyMuPDF (``fitz``).
 
-    Scanned / image-only PDFs will typically yield empty text; OCR will be
-    plugged in later via a separate parser implementation.
+    Scanned / image-only PDFs typically yield empty text; the extraction
+    pipeline falls back to OCR in that case.
     """
 
     def extract_text(self, file_path: str) -> str:

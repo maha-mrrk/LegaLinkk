@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 25
     allowed_mime_types: str = "application/pdf"
 
+    # OCR / extraction pipeline
+    ocr_enabled: bool = True
+    ocr_lang: str = "en"  # PaddleOCR: en | french | arabic | ...
+    ocr_min_chars_per_page: int = 30
+    ocr_render_scale: float = 2.0
+
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024

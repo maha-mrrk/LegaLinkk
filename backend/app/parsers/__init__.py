@@ -1,7 +1,7 @@
 """Document parser abstractions.
 
-Concrete parsers (digital PDF, OCR, …) implement ``DocumentParser`` so the
-service layer can swap strategies without changing upload workflow code.
+Concrete parsers (digital PDF, OCR pipeline, …) implement ``DocumentParser`` so
+the service layer can swap strategies without changing upload workflow code.
 """
 
 from abc import ABC, abstractmethod
@@ -14,6 +14,7 @@ class TextExtractionResult:
 
     text: str
     page_count: int
+    extraction_method: str | None = None
 
 
 class DocumentParser(ABC):

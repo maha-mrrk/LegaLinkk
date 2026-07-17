@@ -119,6 +119,8 @@ Validation rules:
 - Maximum size: 25 MB
 - Files stored under `storage/documents/` with a UUID filename
 - After upload, text is extracted with PyMuPDF and stored in PostgreSQL (`extracted_text`, `page_count`)
+- Scanned PDFs automatically fall back to PaddleOCR (`extraction_method`: `pdf_parser` | `paddle_ocr`)
+- OCR languages via `OCR_LANG`: `en`, `french`, `arabic`
 
 Example upload:
 

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.document import DocumentStatus
+from app.models.document import DocumentStatus, ExtractionMethod
 
 
 class DocumentResponse(BaseModel):
@@ -24,6 +24,10 @@ class DocumentResponse(BaseModel):
     page_count: int | None = Field(
         default=None,
         description="Number of pages detected during text extraction",
+    )
+    extraction_method: ExtractionMethod | None = Field(
+        default=None,
+        description="Engine used to extract text (pdf_parser or paddle_ocr)",
     )
 
 

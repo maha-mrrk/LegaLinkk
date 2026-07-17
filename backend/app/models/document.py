@@ -20,6 +20,13 @@ class DocumentStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class ExtractionMethod(str, enum.Enum):
+    """How document text was extracted."""
+
+    PDF_PARSER = "pdf_parser"
+    PADDLE_OCR = "paddle_ocr"
+
+
 class Document(Base):
     """Persisted metadata for a locally stored PDF document."""
 
@@ -52,9 +59,18 @@ class Document(Base):
     )
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extraction_method: Mapped[ExtractionMethod | None] = mapped_column(
+        Enum(
+            ExtractionMethod,
+            name="extraction_method",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:
         return (
             f"<Document id={self.id} original_filename={self.original_filename!r} "
-            f"status={self.status.value} page_count={self.page_count}>"
+            f"status={self.status.value} page_count={self.page_count} "
+            f"extraction_method={self.extraction_method}>"
         )
