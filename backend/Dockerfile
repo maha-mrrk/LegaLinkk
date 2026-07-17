@@ -31,7 +31,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 
-# Install dependencies first for better layer caching
+# Install locked dependencies first for better layer caching.
 COPY pyproject.toml poetry.lock* ./
 RUN poetry install --no-root --only main
 

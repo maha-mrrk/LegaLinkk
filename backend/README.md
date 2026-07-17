@@ -113,6 +113,9 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `GET` | `/api/v1/documents/{id}` | Get document metadata |
 | `GET` | `/api/v1/documents/{id}/status` | Processing status (`uploaded` / `processing` / `processed` / `failed`) |
 | `GET` | `/api/v1/documents/{id}/chunks` | List semantic chunks for RAG |
+| `POST` | `/api/v1/documents/{id}/index` | Embed chunks (bge-m3) and upsert into pgvector |
+| `GET` | `/api/v1/documents/{id}/index-status` | Semantic index status |
+| `DELETE` | `/api/v1/documents/{id}/index` | Remove pgvector rows for a document |
 | `DELETE` | `/api/v1/documents/{id}` | Delete document + stored file + chunks |
 
 Validation rules:
@@ -128,6 +131,9 @@ Validation rules:
 - Status lifecycle: `uploaded` → `processing` → `processed` | `failed`
 - OCR languages via `OCR_LANG`: `en`, `french`, `arabic`
 - Chunking tuned via `CHUNK_SIZE` / `CHUNK_OVERLAP`
+- Semantic indexing stores 1024-d vectors in `chunk_embeddings` (pgvector), model `BAAI/bge-m3` (fallback `intfloat/multilingual-e5-large`)
+- Index status: `not_indexed` → `indexing` → `indexed` | `failed`
+- Set `AUTO_INDEX_ON_PROCESS=true` to index automatically after chunking
 
 Example upload:
 

@@ -10,9 +10,11 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.models.embedding import IndexStatus
 
 if TYPE_CHECKING:
     from app.models.chunk import DocumentChunk
+    from app.models.embedding import ChunkEmbedding
 
 
 class DocumentStatus(str, enum.Enum):
@@ -74,12 +76,33 @@ class Document(Base):
         ),
         nullable=True,
     )
+    index_status: Mapped[IndexStatus] = mapped_column(
+        Enum(
+            IndexStatus,
+            name="index_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=IndexStatus.NOT_INDEXED,
+        server_default=IndexStatus.NOT_INDEXED.value,
+    )
+    indexed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    indexed_chunk_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         "DocumentChunk",
         back_populates="document",
         cascade="all, delete-orphan",
         order_by="DocumentChunk.chunk_index",
+    )
+    embeddings: Mapped[list["ChunkEmbedding"]] = relationship(
+        "ChunkEmbedding",
+        back_populates="document",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:

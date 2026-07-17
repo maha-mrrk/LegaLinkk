@@ -5,6 +5,7 @@ description = "LegalLink AI-powered legal document analysis platform — FastAPI
 authors = ["LegalLink Team"]
 readme = "README.md"
 packages = [{ include = "app" }]
+
 [tool.poetry.dependencies]
 python = "^3.12"
 fastapi = "^0.115.0"
@@ -22,6 +23,8 @@ pymupdf = "^1.25.0"
 numpy = "^2.0.0"
 paddlepaddle = "^3.0.0"
 paddleocr = "^2.9.1"
+pgvector = "^0.3.6"
+fastembed = "^0.6.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"

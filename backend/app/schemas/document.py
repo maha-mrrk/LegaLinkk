@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.document import DocumentStatus, ExtractionMethod
+from app.models.embedding import IndexStatus
 
 
 class DocumentResponse(BaseModel):
@@ -30,6 +31,10 @@ class DocumentResponse(BaseModel):
         default=None,
         description="Engine used to extract text (pdf_parser or paddle_ocr)",
     )
+    index_status: IndexStatus = IndexStatus.NOT_INDEXED
+    indexed_at: datetime | None = None
+    indexed_chunk_count: int | None = None
+    embedding_model: str | None = None
 
 
 class DocumentListResponse(BaseModel):
@@ -93,3 +98,25 @@ class DocumentChunkListResponse(BaseModel):
     document_id: UUID
     items: list[DocumentChunkResponse]
     total: int
+
+
+class DocumentIndexStatusResponse(BaseModel):
+    """Semantic indexing status for a document."""
+
+    document_id: UUID
+    index_status: IndexStatus
+    chunk_count: int = 0
+    indexed_count: int = 0
+    embedding_model: str | None = None
+    indexed_at: datetime | None = None
+
+
+class DocumentIndexResponse(BaseModel):
+    """Result of an index / delete-index operation."""
+
+    document_id: UUID
+    index_status: IndexStatus
+    indexed_count: int = 0
+    embedding_model: str | None = None
+    indexed_at: datetime | None = None
+    message: str

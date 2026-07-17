@@ -13,6 +13,7 @@ from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
 from app.models.chunk import DocumentChunk
 from app.models.document import Document, DocumentStatus, ExtractionMethod
+from app.models.embedding import IndexStatus
 from app.parsers.extraction_pipeline import ExtractionError, ExtractionPipeline
 from app.repositories.chunk import DocumentChunkRepository
 from app.repositories.document import DocumentRepository
@@ -64,6 +65,10 @@ class DocumentProcessingService:
 
         try:
             await self._chunks.delete_by_document_id(document.id)
+            document.index_status = IndexStatus.NOT_INDEXED
+            document.indexed_at = None
+            document.indexed_chunk_count = 0
+            document.embedding_model = None
 
             logger.info("Parsing started for document_id=%s", document.id)
             extraction = await asyncio.to_thread(
@@ -128,6 +133,25 @@ class DocumentProcessingService:
                 len(entities),
                 document.extraction_method,
             )
+
+            if self._settings.auto_index_on_process:
+                from app.services.indexing import IndexingError, IndexingService
+
+                logger.info(
+                    "Auto-indexing enabled — starting semantic index for %s",
+                    document.id,
+                )
+                try:
+                    document = await IndexingService(
+                        self._session, settings=self._settings
+                    ).index_document(document.id)
+                except IndexingError:
+                    # Chunking succeeded; keep document as processed even if index fails.
+                    logger.exception(
+                        "Auto-indexing failed for document_id=%s", document.id
+                    )
+                    document = await self._documents.get_by_id(document.id) or document
+
             return document
         except Exception:
             await self._session.rollback()

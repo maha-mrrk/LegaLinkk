@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: legallink-db
     restart: unless-stopped
     environment:
@@ -28,6 +28,7 @@ services:
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      EMBEDDING_CACHE_DIR: /root/.cache/fastembed
     ports:
       - "${PORT:-8000}:8000"
     depends_on:
@@ -35,6 +36,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - embedding_cache:/root/.cache/fastembed
     command: >
       uvicorn app.main:app
       --host 0.0.0.0
@@ -43,3 +45,4 @@ services:
 
 volumes:
   postgres_data:
+  embedding_cache:

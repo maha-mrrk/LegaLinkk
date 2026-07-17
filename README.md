@@ -23,12 +23,15 @@ Planned architecture (later increments):
 ```bash
 cp backend/.env.example backend/.env
 docker compose up --build
+docker compose exec backend poetry run alembic upgrade head
 ```
 
 | Resource | URL |
 |----------|-----|
 | API docs (Swagger) | http://localhost:8000/docs |
 | Health check | http://localhost:8000/api/v1/health |
+
+PostgreSQL uses the **pgvector** image (`pgvector/pgvector:pg16`) for semantic indexing.
 
 ## Frontend
 

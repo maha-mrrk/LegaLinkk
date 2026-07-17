@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     chunk_size: int = 900
     chunk_overlap: int = 175
 
+    # Semantic indexing (pgvector + embeddings)
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_fallback_model: str = "intfloat/multilingual-e5-large"
+    embedding_dimension: int = 1024
+    embedding_batch_size: int = 8
+    embedding_cache_dir: str = "/root/.cache/fastembed"
+    auto_index_on_process: bool = True
 
     @property
     def max_upload_size_bytes(self) -> int:
