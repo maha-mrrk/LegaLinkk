@@ -79,6 +79,7 @@ class GeneratorService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         document_id: UUID | None = None,
+        history: Sequence[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Full RAG pipeline: embed → retrieve → rerank → LLM."""
         cleaned = (question or "").strip()
@@ -122,9 +123,11 @@ class GeneratorService:
             ranked,
             temperature=temperature,
             max_tokens=max_tokens,
+            history=history,
         )
         result["metadata"]["top_k"] = candidate_k
         result["metadata"]["final_k"] = keep_k
+        result["metadata"]["history_turns"] = len(history or [])
         result["metadata"]["generation_time"] = round(
             time.perf_counter() - started, 3
         )
@@ -137,6 +140,7 @@ class GeneratorService:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        history: Sequence[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Generate a grounded answer from already selected chunks.
 
@@ -155,6 +159,7 @@ class GeneratorService:
             return self._empty_response(
                 answer=no_answer,
                 generation_time=round(time.perf_counter() - started, 3),
+                history_turns=len(history or []),
             )
 
         logger.info("Building prompt...")
@@ -162,7 +167,11 @@ class GeneratorService:
             context_chunks,
             max_chars=self._settings.rag_max_context_chars,
         )
-        prompt = self._prompt_builder.build(question=cleaned, context=context_text)
+        prompt = self._prompt_builder.build(
+            question=cleaned,
+            context=context_text,
+            history=history,
+        )
         sources = build_sources(used_chunks)
 
         logger.info("Calling LLM...")
@@ -195,6 +204,7 @@ class GeneratorService:
                 "completion_tokens": completion.completion_tokens,
                 "generation_time": elapsed,
                 "context_chunks": len(used_chunks),
+                "history_turns": len(history or []),
             },
         }
 
@@ -203,6 +213,7 @@ class GeneratorService:
         *,
         answer: str,
         generation_time: float,
+        history_turns: int = 0,
     ) -> dict[str, Any]:
         provider_name = (self._settings.llm_provider or "openai").strip().lower()
         model = (self._settings.llm_model or "").strip() or None
@@ -217,6 +228,7 @@ class GeneratorService:
                 "completion_tokens": 0,
                 "generation_time": generation_time,
                 "context_chunks": 0,
+                "history_turns": history_turns,
             },
         }
 

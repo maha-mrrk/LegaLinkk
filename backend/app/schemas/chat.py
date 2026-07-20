@@ -54,6 +54,8 @@ class ChatMetadata(BaseModel):
     context_chunks: int | None = None
     top_k: int | None = None
     final_k: int | None = None
+    history_turns: int | None = None
+    conversation_id: str | None = None
 
 
 class ChatQueryResponse(BaseModel):

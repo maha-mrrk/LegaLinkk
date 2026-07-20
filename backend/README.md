@@ -120,7 +120,12 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `DELETE` | `/api/v1/documents/{id}` | Delete document + stored file + chunks |
 | `POST` | `/api/v1/retrieve` | Semantic Top-K retrieval (pgvector cosine) |
 | `POST` | `/api/v1/retrieve/rerank` | Retrieve candidates then CrossEncoder rerank |
-| `POST` | `/api/v1/chat/query` | Grounded RAG answer (retrieve → rerank → LLM) |
+| `POST` | `/api/v1/chat/query` | One-shot grounded RAG (no memory) |
+| `POST` | `/api/v1/chat/conversations` | Create conversation |
+| `GET` | `/api/v1/chat/conversations` | List conversations |
+| `GET` | `/api/v1/chat/conversations/{id}` | Get conversation + messages |
+| `DELETE` | `/api/v1/chat/conversations/{id}` | Delete conversation |
+| `POST` | `/api/v1/chat/conversations/{id}/messages` | Multi-turn RAG message |
 
 Validation rules:
 
