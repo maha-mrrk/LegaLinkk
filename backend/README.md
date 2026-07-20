@@ -120,6 +120,7 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `DELETE` | `/api/v1/documents/{id}` | Delete document + stored file + chunks |
 | `POST` | `/api/v1/retrieve` | Semantic Top-K retrieval (pgvector cosine) |
 | `POST` | `/api/v1/retrieve/rerank` | Retrieve candidates then CrossEncoder rerank |
+| `POST` | `/api/v1/chat/query` | Grounded RAG answer (retrieve → rerank → LLM) |
 
 Validation rules:
 
@@ -141,6 +142,8 @@ Validation rules:
 - Rerank: `POST /api/v1/retrieve/rerank` with `{ "query": "...", "top_k": 15, "final_k": 5 }`
 - Reranker preferred model `BAAI/bge-reranker-v2-m3` (ONNX via FastEmbed), fallback MiniLM
 - Only documents with `index_status=indexed` are searched; cosine similarity scores are returned per chunk
+- RAG: set `LLM_PROVIDER` (`openai` | `nvidia_nim` | `groq`) and `LLM_API_KEY`, then `POST /api/v1/chat/query`
+- Answers are grounded on retrieved context only; otherwise returns the configured no-answer message
 
 Example upload:
 

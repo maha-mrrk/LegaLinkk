@@ -79,6 +79,19 @@ class Settings(BaseSettings):
     reranker_final_k: int = 5
     reranker_cache_dir: str = "/root/.cache/fastembed"
 
+    # LLM / RAG generation (OpenAI-compatible: openai | nvidia_nim | groq)
+    llm_provider: str = "openai"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_base_url: str = ""
+    llm_temperature: float = 0.1
+    llm_max_tokens: int = 1024
+    llm_timeout_seconds: float = 120.0
+    rag_max_context_chars: int = 12000
+    rag_no_answer_message: str = (
+        "I cannot answer this question based on the uploaded documents."
+    )
+
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024
