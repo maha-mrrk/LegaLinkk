@@ -1,6 +1,6 @@
 """CLI worker: run PaddleOCR in an isolated process.
 
-Invoked as ``python -m app.ocr.paddle_ocr_worker <pdf_path> --lang en --scale 2.0``.
+Invoked as ``python -m app.ocr.paddle_ocr_worker <pdf_path> --lang french --scale 1.0``.
 Writes a JSON result file (and a single JSON line to stdout). A segfault here
 kills only this process.
 """
@@ -25,7 +25,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Isolated PaddleOCR worker")
     parser.add_argument("file_path", help="Path to the PDF file")
     parser.add_argument("--lang", default="en")
-    parser.add_argument("--scale", type=float, default=2.0)
+    parser.add_argument("--scale", type=float, default=1.0)
+    parser.add_argument("--max-image-side", type=int, default=1280)
+    parser.add_argument(
+        "--use-angle-cls",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable/disable Paddle angle classifier (disabled by default for low RAM)",
+    )
     parser.add_argument(
         "--output-json",
         default=None,
@@ -36,7 +43,11 @@ def main() -> int:
     try:
         from app.ocr.paddle_ocr import PaddleOcrEngine
 
-        engine = PaddleOcrEngine(lang=args.lang)
+        engine = PaddleOcrEngine(
+            lang=args.lang,
+            use_angle_cls=args.use_angle_cls,
+            max_image_side=args.max_image_side,
+        )
         result = engine.recognize_pdf(args.file_path, scale=args.scale)
         _write_payload(
             {

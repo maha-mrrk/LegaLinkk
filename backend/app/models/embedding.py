@@ -1,4 +1,4 @@
-"""SQLAlchemy model for chunk embeddings stored in pgvector."""
+"""SQLAlchemy model for document chunk embeddings stored in pgvector."""
 
 from __future__ import annotations
 
@@ -28,8 +28,13 @@ class IndexStatus(str, enum.Enum):
     FAILED = "failed"
 
 
-class ChunkEmbedding(Base):
-    """Vector embedding for one document chunk (pgvector)."""
+class DocumentEmbedding(Base):
+    """Vector embedding for one document chunk (PostgreSQL + pgvector).
+
+    Core fields required for indexing: id, document_id, chunk_id, embedding,
+    embedding_model, created_at. Extra denormalized metadata supports future
+    Top-K retrieval / RAG without joining chunks.
+    """
 
     __tablename__ = "chunk_embeddings"
     __table_args__ = (
@@ -83,6 +88,10 @@ class ChunkEmbedding(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<ChunkEmbedding id={self.id} document_id={self.document_id} "
+            f"<DocumentEmbedding id={self.id} document_id={self.document_id} "
             f"chunk_id={self.chunk_id} model={self.embedding_model!r}>"
         )
+
+
+# Backward-compatible alias (previous name).
+ChunkEmbedding = DocumentEmbedding

@@ -22,6 +22,8 @@ class EmbeddingService:
 
     Preferred model: ``BAAI/bge-m3``
     Fallback: ``intfloat/multilingual-e5-large``
+
+    The model is loaded once per process and reused.
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -40,16 +42,34 @@ class EmbeddingService:
     def dimension(self) -> int:
         return self._settings.embedding_dimension
 
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """Embed a list of chunk texts (passage / document style)."""
+    def embed_text(self, text: str) -> list[float]:
+        """Embed a single passage/document text and return its dense vector."""
+        vectors = self.embed_batch([text])
+        return vectors[0]
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a retrieval query (uses ``query:`` prefix for e5 models)."""
+        self._ensure_model()
+        assert self._model is not None
+        prepared = self._prepare_query(text)
+        vectors = self._embed_prepared([prepared])
+        return vectors[0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch of texts (passage / document style)."""
         if not texts:
             return []
         self._ensure_model()
         assert self._model is not None
-
         prepared = [self._prepare_passage(text) for text in texts]
-        logger.info("Generating embeddings... (%s texts)", len(prepared))
+        return self._embed_prepared(prepared)
 
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Alias for ``embed_batch`` (backward compatible)."""
+        return self.embed_batch(texts)
+
+    def _embed_prepared(self, prepared: list[str]) -> list[list[float]]:
+        assert self._model is not None
         batch_size = max(1, self._settings.embedding_batch_size)
         vectors: list[list[float]] = []
         total = len(prepared)
@@ -57,8 +77,7 @@ class EmbeddingService:
         for start in range(0, total, batch_size):
             batch = prepared[start : start + batch_size]
             end = min(start + len(batch), total)
-            logger.info("Embedding %s/%s", end, total)
-            # FastEmbed yields numpy arrays / lists per text.
+            logger.info("Generating embedding %s/%s", end, total)
             for row in self._model.embed(batch, batch_size=len(batch)):
                 vector = [float(x) for x in list(row)]
                 if len(vector) != self._settings.embedding_dimension:
@@ -68,9 +87,9 @@ class EmbeddingService:
                     )
                 vectors.append(vector)
 
-        if len(vectors) != len(texts):
+        if len(vectors) != len(prepared):
             raise EmbeddingError(
-                f"Embedding count mismatch: got {len(vectors)} for {len(texts)} texts"
+                f"Embedding count mismatch: got {len(vectors)} for {len(prepared)} texts"
             )
         return vectors
 
@@ -80,6 +99,14 @@ class EmbeddingService:
             cleaned = " "
         if self._is_e5:
             return f"passage: {cleaned}"
+        return cleaned
+
+    def _prepare_query(self, text: str) -> str:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            cleaned = " "
+        if self._is_e5:
+            return f"query: {cleaned}"
         return cleaned
 
     def _ensure_model(self) -> None:

@@ -14,7 +14,7 @@ from app.models.embedding import IndexStatus
 
 if TYPE_CHECKING:
     from app.models.chunk import DocumentChunk
-    from app.models.embedding import ChunkEmbedding
+    from app.models.embedding import DocumentEmbedding
 
 
 class DocumentStatus(str, enum.Enum):
@@ -99,8 +99,8 @@ class Document(Base):
         cascade="all, delete-orphan",
         order_by="DocumentChunk.chunk_index",
     )
-    embeddings: Mapped[list["ChunkEmbedding"]] = relationship(
-        "ChunkEmbedding",
+    embeddings: Mapped[list["DocumentEmbedding"]] = relationship(
+        "DocumentEmbedding",
         back_populates="document",
         cascade="all, delete-orphan",
     )

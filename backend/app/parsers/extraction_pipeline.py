@@ -40,7 +40,11 @@ class ExtractionPipeline(DocumentParser):
 
     def _get_ocr_engine(self) -> OcrEngine:
         if self._ocr_engine is None:
-            self._ocr_engine = get_paddle_ocr_engine(self._settings.ocr_lang)
+            self._ocr_engine = get_paddle_ocr_engine(
+            self._settings.ocr_lang,
+            self._settings.ocr_use_angle_cls,
+            self._settings.ocr_max_image_side,
+        )
         return self._ocr_engine
 
     def is_scanned_pdf(self, text: str, page_count: int) -> bool:
@@ -84,6 +88,9 @@ class ExtractionPipeline(DocumentParser):
                     file_path,
                     lang=self._settings.ocr_lang,
                     scale=self._settings.ocr_render_scale,
+                    timeout_seconds=self._settings.ocr_timeout_seconds,
+                    use_angle_cls=self._settings.ocr_use_angle_cls,
+                    max_image_side=self._settings.ocr_max_image_side,
                 )
         except OcrError as exc:
             logger.exception("OCR extraction failed for %s", file_path)

@@ -12,6 +12,7 @@ from app.schemas.document import (
     DocumentIndexResponse,
     DocumentIndexStatusResponse,
     DocumentListResponse,
+    DocumentReindexResponse,
     DocumentResponse,
     DocumentStatusResponse,
 )
@@ -109,12 +110,45 @@ async def get_document_status(
 
 
 @router.post(
+    "/{document_id}/reprocess",
+    response_model=DocumentResponse,
+    summary="Re-run preprocessing for a document",
+    description=(
+        "Re-run extract → clean → chunk (and optional auto-index) for an existing "
+        "document. Useful after a failed OCR/processing attempt."
+    ),
+)
+async def reprocess_document(
+    document_id: UUID,
+    processing: DocumentProcessingService = Depends(get_processing_service),
+) -> DocumentResponse:
+    document = await processing.process_document(document_id)
+    return DocumentResponse.model_validate(document)
+
+
+@router.post(
+    "/reindex",
+    response_model=DocumentReindexResponse,
+    summary="Re-index every processed document",
+    description=(
+        "For each processed document: remove existing embeddings, regenerate "
+        "vectors with the embedding model, and store them in PostgreSQL/pgvector."
+    ),
+)
+async def reindex_documents(
+    indexing: IndexingService = Depends(get_indexing_service),
+) -> DocumentReindexResponse:
+    payload = await indexing.reindex_all()
+    return DocumentReindexResponse.model_validate(payload)
+
+
+@router.post(
     "/{document_id}/index",
     response_model=DocumentIndexResponse,
     summary="Index document chunks into pgvector",
     description=(
-        "Generate multilingual embeddings (bge-m3) for every chunk and upsert "
-        "them into PostgreSQL/pgvector. Re-indexing updates existing vectors."
+        "Generate multilingual embeddings (bge-m3) for every chunk and store "
+        "them into PostgreSQL/pgvector. Existing embeddings are replaced."
     ),
 )
 async def index_document(

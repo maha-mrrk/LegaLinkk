@@ -11,6 +11,8 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Cap DB memory so OCR/API keep headroom on low-RAM hosts.
+    mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-legallink} -d ${POSTGRES_DB:-legallink}"]
       interval: 5s
@@ -29,6 +31,15 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       EMBEDDING_CACHE_DIR: /root/.cache/fastembed
+      # Low-RAM runtime knobs (override .env if needed)
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      FLAGS_use_mkldnn: "0"
+      OCR_RENDER_SCALE: "1.0"
+      OCR_USE_ANGLE_CLS: "false"
+      OCR_MAX_IMAGE_SIDE: "1280"
+      EMBEDDING_BATCH_SIZE: "2"
     ports:
       - "${PORT:-8000}:8000"
     depends_on:
@@ -37,11 +48,12 @@ services:
     volumes:
       - ./backend:/app
       - embedding_cache:/root/.cache/fastembed
+    # No --reload: reload doubles process memory and is unstable under RAM pressure.
     command: >
       uvicorn app.main:app
       --host 0.0.0.0
       --port 8000
-      --reload
+      --workers 1
 
 volumes:
   postgres_data:

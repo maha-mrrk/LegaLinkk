@@ -113,10 +113,13 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `GET` | `/api/v1/documents/{id}` | Get document metadata |
 | `GET` | `/api/v1/documents/{id}/status` | Processing status (`uploaded` / `processing` / `processed` / `failed`) |
 | `GET` | `/api/v1/documents/{id}/chunks` | List semantic chunks for RAG |
-| `POST` | `/api/v1/documents/{id}/index` | Embed chunks (bge-m3) and upsert into pgvector |
+| `POST` | `/api/v1/documents/{id}/index` | Embed chunks (bge-m3) and store in pgvector |
 | `GET` | `/api/v1/documents/{id}/index-status` | Semantic index status |
 | `DELETE` | `/api/v1/documents/{id}/index` | Remove pgvector rows for a document |
+| `POST` | `/api/v1/documents/reindex` | Re-index every processed document |
 | `DELETE` | `/api/v1/documents/{id}` | Delete document + stored file + chunks |
+| `POST` | `/api/v1/retrieve` | Semantic Top-K retrieval (pgvector cosine) |
+| `POST` | `/api/v1/retrieve/rerank` | Retrieve candidates then CrossEncoder rerank |
 
 Validation rules:
 
@@ -134,6 +137,10 @@ Validation rules:
 - Semantic indexing stores 1024-d vectors in `chunk_embeddings` (pgvector), model `BAAI/bge-m3` (fallback `intfloat/multilingual-e5-large`)
 - Index status: `not_indexed` → `indexing` → `indexed` | `failed`
 - Set `AUTO_INDEX_ON_PROCESS=true` to index automatically after chunking
+- Retrieval: `POST /api/v1/retrieve` with `{ "query": "...", "top_k": 5 }` (default `RETRIEVAL_TOP_K=5`)
+- Rerank: `POST /api/v1/retrieve/rerank` with `{ "query": "...", "top_k": 15, "final_k": 5 }`
+- Reranker preferred model `BAAI/bge-reranker-v2-m3` (ONNX via FastEmbed), fallback MiniLM
+- Only documents with `index_status=indexed` are searched; cosine similarity scores are returned per chunk
 
 Example upload:
 

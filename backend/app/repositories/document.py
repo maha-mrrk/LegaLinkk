@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.document import Document
+from app.models.document import Document, DocumentStatus
 
 
 class DocumentRepository:
@@ -32,6 +32,20 @@ class DocumentRepository:
             .order_by(Document.upload_date.desc())
             .offset(skip)
             .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def list_by_statuses(
+        self,
+        statuses: list[DocumentStatus],
+    ) -> list[Document]:
+        """List documents whose processing status is in ``statuses``."""
+        if not statuses:
+            return []
+        result = await self._session.execute(
+            select(Document)
+            .where(Document.status.in_(statuses))
+            .order_by(Document.upload_date.desc())
         )
         return list(result.scalars().all())
 

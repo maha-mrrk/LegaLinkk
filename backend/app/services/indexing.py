@@ -15,7 +15,7 @@ from app.models.document import Document, DocumentStatus
 from app.models.embedding import IndexStatus
 from app.repositories.chunk import DocumentChunkRepository
 from app.repositories.document import DocumentRepository
-from app.repositories.vector import VectorRecord, VectorRepository
+from app.repositories.embedding import EmbeddingRecord, EmbeddingRepository
 from app.services.embedding import EmbeddingService, get_embedding_service
 
 logger = get_logger(__name__)
@@ -41,13 +41,14 @@ class IndexingService:
         self._session = session
         self._documents = DocumentRepository(session)
         self._chunks = DocumentChunkRepository(session)
-        self._vectors = VectorRepository(session)
+        self._embeddings_repo = EmbeddingRepository(session)
         self._embeddings = embedding_service or get_embedding_service()
 
     async def index_document(self, document_id: UUID) -> Document:
-        """Generate embeddings for all chunks and upsert into pgvector.
+        """Generate embeddings for all chunks and store them in PostgreSQL/pgvector.
 
-        Re-indexing a document replaces its vectors (no duplicates).
+        If embeddings already exist, they are removed and regenerated (no duplicates).
+        Concurrent indexing of the same document is rejected.
         """
         document = await self._documents.get_by_id(document_id)
         if document is None:
@@ -62,6 +63,12 @@ class IndexingService:
                 f"(current status: {document.status.value})"
             )
 
+        if document.index_status == IndexStatus.INDEXING:
+            raise ValidationError(
+                "Document indexing is already in progress "
+                f"(document_id={document_id})"
+            )
+
         chunks = await self._chunks.list_by_document_id(document_id)
         if not chunks:
             raise ValidationError("Document has no chunks to index")
@@ -69,14 +76,14 @@ class IndexingService:
         document.index_status = IndexStatus.INDEXING
         await self._session.commit()
         logger.info(
-            "Indexing started for document_id=%s chunks=%s",
+            "Document indexing started document_id=%s chunks=%s",
             document.id,
             len(chunks),
         )
 
         try:
             texts = [chunk.text for chunk in chunks]
-            vectors = await asyncio.to_thread(self._embeddings.embed_texts, texts)
+            vectors = await asyncio.to_thread(self._embeddings.embed_batch, texts)
             if len(vectors) != len(chunks):
                 raise IndexingError(
                     f"Embedding count mismatch: got {len(vectors)} for {len(chunks)} chunks"
@@ -84,13 +91,13 @@ class IndexingService:
 
             model_name = self._embeddings.model_name
             logger.info(
-                "Saving vectors... document_id=%s count=%s",
+                "Saving embeddings document_id=%s count=%s",
                 document.id,
                 len(chunks),
             )
 
             records = [
-                VectorRecord(
+                EmbeddingRecord(
                     document_id=document.id,
                     chunk_id=chunk.id,
                     filename=document.original_filename,
@@ -112,8 +119,8 @@ class IndexingService:
             ]
 
             # Replace document vectors so re-index never duplicates rows.
-            await self._vectors.delete_by_document_id(document.id)
-            saved = await self._vectors.upsert_many(records)
+            await self._embeddings_repo.delete_by_document_id(document.id)
+            saved = await self._embeddings_repo.bulk_insert(records)
 
             document.index_status = IndexStatus.INDEXED
             document.indexed_at = datetime.now(timezone.utc)
@@ -128,7 +135,6 @@ class IndexingService:
                 saved,
                 model_name,
             )
-            logger.info("Document indexed id=%s", document.id)
             return document
         except Exception as exc:
             await self._session.rollback()
@@ -136,17 +142,55 @@ class IndexingService:
             if failed is not None:
                 failed.index_status = IndexStatus.FAILED
                 await self._session.commit()
-            logger.exception("Indexing failed for document_id=%s", document_id)
+            logger.exception("Index failed document_id=%s", document_id)
             raise IndexingError(
                 f"Indexing failed for document {document_id}"
             ) from exc
+
+    async def reindex_all(self) -> dict:
+        """Re-index every processed document (delete old embeddings, regenerate)."""
+        documents = await self._documents.list_by_statuses(
+            [
+                DocumentStatus.PROCESSED,
+                DocumentStatus.COMPLETED,
+            ]
+        )
+        logger.info("Bulk reindex started documents=%s", len(documents))
+
+        succeeded: list[UUID] = []
+        failed: list[UUID] = []
+
+        for document in documents:
+            try:
+                indexed = await self.index_document(document.id)
+                succeeded.append(indexed.id)
+            except Exception:
+                failed.append(document.id)
+                logger.exception(
+                    "Index failed during reindex document_id=%s",
+                    document.id,
+                )
+
+        logger.info(
+            "Bulk reindex completed succeeded=%s failed=%s",
+            len(succeeded),
+            len(failed),
+        )
+        return {
+            "total": len(documents),
+            "succeeded": len(succeeded),
+            "failed": len(failed),
+            "succeeded_ids": succeeded,
+            "failed_ids": failed,
+            "message": "Reindex completed",
+        }
 
     async def get_index_status(self, document_id: UUID) -> dict:
         document = await self._documents.get_by_id(document_id)
         if document is None:
             raise NotFoundError(f"Document {document_id} not found")
 
-        vector_count = await self._vectors.count_by_document_id(document_id)
+        vector_count = await self._embeddings_repo.count_by_document_id(document_id)
         chunk_count = len(await self._chunks.list_by_document_id(document_id))
         return {
             "document_id": document.id,
@@ -162,7 +206,7 @@ class IndexingService:
         if document is None:
             raise NotFoundError(f"Document {document_id} not found")
 
-        deleted = await self._vectors.delete_by_document_id(document_id)
+        deleted = await self._embeddings_repo.delete_by_document_id(document_id)
         document.index_status = IndexStatus.NOT_INDEXED
         document.indexed_at = None
         document.indexed_chunk_count = 0

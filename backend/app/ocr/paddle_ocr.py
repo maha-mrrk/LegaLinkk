@@ -21,9 +21,16 @@ class PaddleOcrEngine(OcrEngine):
     The underlying PaddleOCR model is loaded lazily and reused across calls.
     """
 
-    def __init__(self, *, lang: str = "en", use_angle_cls: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        lang: str = "en",
+        use_angle_cls: bool = False,
+        max_image_side: int = 1280,
+    ) -> None:
         self._lang = lang
         self._use_angle_cls = use_angle_cls
+        self._max_image_side = max(256, max_image_side)
         self._ocr: Any | None = None
 
     def _get_ocr(self) -> Any:
@@ -35,8 +42,14 @@ class PaddleOcrEngine(OcrEngine):
             os.environ.setdefault("FLAGS_enable_pir_api", "0")
             os.environ.setdefault("FLAGS_enable_pir_in_executor", "0")
             os.environ.setdefault("OMP_NUM_THREADS", "1")
+            os.environ.setdefault("MKL_NUM_THREADS", "1")
+            os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
-            logger.info("Initializing PaddleOCR (lang=%s)", self._lang)
+            logger.info(
+                "Initializing PaddleOCR (lang=%s angle_cls=%s)",
+                self._lang,
+                self._use_angle_cls,
+            )
             try:
                 from paddleocr import PaddleOCR
             except ImportError as exc:
@@ -68,7 +81,13 @@ class PaddleOcrEngine(OcrEngine):
         """Run OCR on a numpy image or filesystem path."""
         ocr = self._get_ocr()
         try:
-            raw = ocr.ocr(image, cls=self._use_angle_cls)
+            if self._use_angle_cls:
+                raw = ocr.ocr(image, cls=True)
+            else:
+                try:
+                    raw = ocr.ocr(image, cls=False)
+                except TypeError:
+                    raw = ocr.ocr(image)
         except TypeError:
             # Newer paddleocr versions dropped ``cls``
             try:
@@ -84,7 +103,7 @@ class PaddleOcrEngine(OcrEngine):
         logger.debug("PaddleOCR recognized %s characters from image", len(text))
         return text
 
-    def recognize_pdf(self, file_path: str, *, scale: float = 2.0) -> OcrDocumentResult:
+    def recognize_pdf(self, file_path: str, *, scale: float = 1.0) -> OcrDocumentResult:
         """Convert each PDF page to an image and OCR it in order."""
         path = Path(file_path)
         if not path.is_file():
@@ -111,10 +130,9 @@ class PaddleOcrEngine(OcrEngine):
                 try:
                     page = document.load_page(page_index)
                     pix = page.get_pixmap(matrix=matrix, alpha=False)
-                    image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-                        pix.height, pix.width, pix.n
-                    )
+                    image = self._pixmap_to_image(pix)
                     page_text = self.recognize_image(image)
+                    del image
                 except OcrError:
                     logger.exception("OCR failed on page %s of %s", page_number, file_path)
                     page_text = ""
@@ -142,6 +160,29 @@ class PaddleOcrEngine(OcrEngine):
             page_count=len(page_results),
             pages=tuple(page_results),
         )
+
+    def _pixmap_to_image(self, pix: fitz.Pixmap) -> np.ndarray:
+        """Convert a pixmap to uint8 RGB/gray, downscaling when too large."""
+        image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+            pix.height, pix.width, pix.n
+        )
+        if pix.n == 4:
+            image = image[:, :, :3]
+        max_side = max(int(image.shape[0]), int(image.shape[1]))
+        if max_side <= self._max_image_side:
+            return np.ascontiguousarray(image)
+
+        # Integer box downscale keeps dependencies light (no OpenCV required).
+        factor = max(1, int(np.ceil(max_side / self._max_image_side)))
+        image = image[::factor, ::factor]
+        logger.info(
+            "Downscaled OCR image by factor=%s to %sx%s (cap=%s)",
+            factor,
+            image.shape[1],
+            image.shape[0],
+            self._max_image_side,
+        )
+        return np.ascontiguousarray(image)
 
     @staticmethod
     def _lines_from_result(raw: Any) -> str:
@@ -185,6 +226,14 @@ class PaddleOcrEngine(OcrEngine):
 
 
 @lru_cache(maxsize=4)
-def get_paddle_ocr_engine(lang: str = "en") -> PaddleOcrEngine:
+def get_paddle_ocr_engine(
+    lang: str = "en",
+    use_angle_cls: bool = False,
+    max_image_side: int = 1280,
+) -> PaddleOcrEngine:
     """Return a cached PaddleOCR engine for the given language code."""
-    return PaddleOcrEngine(lang=lang)
+    return PaddleOcrEngine(
+        lang=lang,
+        use_angle_cls=use_angle_cls,
+        max_image_side=max_image_side,
+    )

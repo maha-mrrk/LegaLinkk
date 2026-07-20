@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -59,8 +60,10 @@ def run_paddle_ocr_subprocess(
     file_path: str,
     *,
     lang: str = "en",
-    scale: float = 2.0,
-    timeout_seconds: int = 600,
+    scale: float = 1.0,
+    timeout_seconds: int = 1800,
+    use_angle_cls: bool = False,
+    max_image_side: int = 1280,
 ) -> OcrDocumentResult:
     """Execute OCR in a child process and return structured results."""
     with tempfile.TemporaryDirectory(prefix="legallink-ocr-") as tmp_dir:
@@ -74,10 +77,22 @@ def run_paddle_ocr_subprocess(
             lang,
             "--scale",
             str(scale),
+            "--max-image-side",
+            str(max_image_side),
+            "--use-angle-cls" if use_angle_cls else "--no-use-angle-cls",
             "--output-json",
             str(output_json),
         ]
-        logger.info("Starting isolated OCR subprocess for %s", file_path)
+        logger.info(
+            "Starting isolated OCR subprocess for %s "
+            "(timeout=%ss scale=%s lang=%s angle_cls=%s max_side=%s)",
+            file_path,
+            timeout_seconds,
+            scale,
+            lang,
+            use_angle_cls,
+            max_image_side,
+        )
 
         try:
             completed = subprocess.run(
@@ -86,9 +101,23 @@ def run_paddle_ocr_subprocess(
                 text=True,
                 timeout=timeout_seconds,
                 check=False,
+                env={
+                    **os.environ,
+                    "OMP_NUM_THREADS": "1",
+                    "MKL_NUM_THREADS": "1",
+                    "OPENBLAS_NUM_THREADS": "1",
+                    "FLAGS_use_mkldnn": "0",
+                },
             )
         except subprocess.TimeoutExpired as exc:
-            raise OcrError(f"OCR subprocess timed out for {file_path}") from exc
+            logger.error(
+                "OCR subprocess timed out after %ss for %s",
+                timeout_seconds,
+                file_path,
+            )
+            raise OcrError(
+                f"OCR subprocess timed out after {timeout_seconds}s for {file_path}"
+            ) from exc
 
         if completed.returncode < 0:
             signal_num = -completed.returncode

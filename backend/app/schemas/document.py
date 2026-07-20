@@ -120,3 +120,14 @@ class DocumentIndexResponse(BaseModel):
     embedding_model: str | None = None
     indexed_at: datetime | None = None
     message: str
+
+
+class DocumentReindexResponse(BaseModel):
+    """Result of re-indexing every processed document."""
+
+    total: int
+    succeeded: int
+    failed: int
+    succeeded_ids: list[UUID] = Field(default_factory=list)
+    failed_ids: list[UUID] = Field(default_factory=list)
+    message: str

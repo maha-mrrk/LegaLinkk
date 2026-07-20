@@ -43,11 +43,18 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 25
     allowed_mime_types: str = "application/pdf"
 
-    # OCR / extraction pipeline
+    # OCR / extraction pipeline (tuned for low-RAM hosts)
     ocr_enabled: bool = True
     ocr_lang: str = "en"  # PaddleOCR: en | french | arabic | ...
     ocr_min_chars_per_page: int = 30
-    ocr_render_scale: float = 2.0
+    # Lower scale = less RAM / faster CPU OCR on scanned A4 pages.
+    ocr_render_scale: float = 1.0
+    # Cap longest pixmap side (px) before OCR to avoid huge bitmaps.
+    ocr_max_image_side: int = 1280
+    # Angle classifier doubles model memory; disable on low-RAM machines.
+    ocr_use_angle_cls: bool = False
+    # First OCR run may download Paddle models; keep a generous timeout.
+    ocr_timeout_seconds: int = 1800
 
     # Chunking (RAG preprocessing)
     chunk_size: int = 900
@@ -57,9 +64,20 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     embedding_fallback_model: str = "intfloat/multilingual-e5-large"
     embedding_dimension: int = 1024
-    embedding_batch_size: int = 8
+    embedding_batch_size: int = 2
     embedding_cache_dir: str = "/root/.cache/fastembed"
     auto_index_on_process: bool = True
+
+    # Semantic retrieval (pgvector cosine Top-K)
+    retrieval_top_k: int = 5
+    # Candidate pool size before CrossEncoder reranking
+    retrieval_candidate_k: int = 15
+
+    # CrossEncoder reranking
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_fallback_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_final_k: int = 5
+    reranker_cache_dir: str = "/root/.cache/fastembed"
 
     @property
     def max_upload_size_bytes(self) -> int:
