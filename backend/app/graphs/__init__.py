@@ -1,10 +1,10 @@
-"""LangGraph workflow assembly package (architecture preparation).
+"""LangGraph workflow assembly package.
 
-Will host the builders that wire graph agents/nodes and edges into executable
-LangGraph workflows over :class:`~app.state.graph_state.GraphState`.
-No workflow is defined yet — only the structure.
+Hosts the builders that wire graph nodes/edges into executable LangGraph
+workflows over :class:`~app.state.graph_state.GraphState`.
 """
 
 from app.graphs.graph_builder import GraphBuilder
+from app.graphs.ingestion_graph import build_ingestion_graph
 
-__all__ = ["GraphBuilder"]
+__all__ = ["GraphBuilder", "build_ingestion_graph"]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -14,11 +13,10 @@ from app.core.logging import get_logger
 from app.models.chunk import DocumentChunk
 from app.models.document import Document, DocumentStatus, ExtractionMethod
 from app.models.embedding import IndexStatus
-from app.parsers.extraction_pipeline import ExtractionError, ExtractionPipeline
+from app.parsers.extraction_pipeline import ExtractionPipeline
 from app.repositories.chunk import DocumentChunkRepository
 from app.repositories.document import DocumentRepository
 from app.services.chunker import SemanticChunker
-from app.services.text_cleaner import clean_text
 
 logger = get_logger(__name__)
 
@@ -50,7 +48,16 @@ class DocumentProcessingService:
         )
 
     async def process_document(self, document_id: UUID) -> Document:
-        """Run the full preprocessing pipeline for an existing document."""
+        """Run the full ingestion pipeline (LangGraph) for an existing document.
+
+        The node orchestration (parse → ocr → clean → chunk → embed → persist →
+        index) is driven by :func:`app.graphs.ingestion_graph.build_ingestion_graph`.
+        This method only owns the surrounding transactional shell: flipping the
+        document status and resetting any previous processing/index state.
+        """
+        # Imported lazily to avoid a circular import (the graph persists via us).
+        from app.graphs.ingestion_graph import build_ingestion_graph
+
         document = await self._documents.get_by_id(document_id)
         if document is None:
             raise NotFoundError(f"Document {document_id} not found")
@@ -69,89 +76,36 @@ class DocumentProcessingService:
             document.indexed_at = None
             document.indexed_chunk_count = 0
             document.embedding_model = None
-
-            logger.info("Parsing started for document_id=%s", document.id)
-            extraction = await asyncio.to_thread(
-                self._extraction.extract, document.file_path
-            )
-
-            method_value = extraction.extraction_method
-            if method_value == ExtractionMethod.PADDLE_OCR.value:
-                logger.info("OCR used for document_id=%s", document.id)
-
-            cleaned = clean_text(extraction.text)
-            if not cleaned:
-                raise DocumentProcessingError(
-                    f"No usable text extracted from document {document.id}"
-                )
-
-            document.extracted_text = cleaned
-            document.page_count = extraction.page_count
-            if method_value:
-                document.extraction_method = ExtractionMethod(method_value)
-
-            page_tuples = [
-                (page.page_number, page.text) for page in extraction.pages
-            ] or None
-
-            created_at = datetime.now(timezone.utc)
-            drafts = self._chunker.chunk_document(
-                document_id=document.id,
-                text=cleaned,
-                pages=page_tuples,
-                extraction_method=method_value,
-                created_at=created_at,
-            )
-            if not drafts:
-                raise DocumentProcessingError(
-                    f"Chunking produced no chunks for document {document.id}"
-                )
-
-            entities = [
-                DocumentChunk(
-                    document_id=document.id,
-                    chunk_index=draft.chunk_index,
-                    text=draft.text,
-                    metadata_=draft.metadata,
-                    created_at=created_at,
-                )
-                for draft in drafts
-            ]
-            await self._chunks.create_many(entities)
-            logger.info(
-                "Chunks stored for document_id=%s count=%s",
-                document.id,
-                len(entities),
-            )
-
-            document.status = DocumentStatus.PROCESSED
             await self._session.commit()
-            await self._session.refresh(document)
+
+            graph = build_ingestion_graph(
+                session=self._session,
+                settings=self._settings,
+                persister=self,
+            )
+            initial_state = {
+                "document_id": str(document.id),
+                "filename": document.original_filename,
+                "metadata": {"file_path": document.file_path},
+                "errors": [],
+            }
+            final_state = await graph.ainvoke(initial_state)
+
+            errors = final_state.get("errors") or []
+            if errors:
+                logger.warning(
+                    "Ingestion finished with non-fatal errors for document_id=%s: %s",
+                    document.id,
+                    errors,
+                )
+
+            refreshed = await self._documents.get_by_id(document.id)
+            document = refreshed or document
             logger.info(
-                "Processing completed for document_id=%s chunks=%s method=%s",
+                "Processing completed for document_id=%s method=%s",
                 document.id,
-                len(entities),
                 document.extraction_method,
             )
-
-            if self._settings.auto_index_on_process:
-                from app.services.indexing import IndexingError, IndexingService
-
-                logger.info(
-                    "Auto-indexing enabled — starting semantic index for %s",
-                    document.id,
-                )
-                try:
-                    document = await IndexingService(
-                        self._session, settings=self._settings
-                    ).index_document(document.id)
-                except IndexingError:
-                    # Chunking succeeded; keep document as processed even if index fails.
-                    logger.exception(
-                        "Auto-indexing failed for document_id=%s", document.id
-                    )
-                    document = await self._documents.get_by_id(document.id) or document
-
             return document
         except Exception:
             await self._session.rollback()
@@ -163,6 +117,62 @@ class DocumentProcessingService:
                 "Processing failed for document_id=%s", document_id
             )
             raise
+
+    async def finalize_chunks(
+        self,
+        document_id: UUID,
+        *,
+        cleaned_text: str,
+        page_count: int,
+        extraction_method: str | None,
+        chunks: list[dict],
+        created_at: datetime | None = None,
+    ) -> Document:
+        """Persist chunks produced by the ingestion graph and mark the document processed.
+
+        This is the single source of truth for chunk persistence: the graph's
+        persistence step delegates here so the logic is never duplicated.
+        """
+        document = await self._documents.get_by_id(document_id)
+        if document is None:
+            raise NotFoundError(f"Document {document_id} not found")
+
+        if not (cleaned_text or "").strip():
+            raise DocumentProcessingError(
+                f"No usable text extracted from document {document_id}"
+            )
+        if not chunks:
+            raise DocumentProcessingError(
+                f"Chunking produced no chunks for document {document_id}"
+            )
+
+        document.extracted_text = cleaned_text
+        document.page_count = page_count
+        if extraction_method:
+            document.extraction_method = ExtractionMethod(extraction_method)
+
+        stamp = created_at or datetime.now(timezone.utc)
+        entities = [
+            DocumentChunk(
+                document_id=document.id,
+                chunk_index=chunk["chunk_index"],
+                text=chunk["text"],
+                metadata_=chunk.get("metadata") or {},
+                created_at=stamp,
+            )
+            for chunk in chunks
+        ]
+        await self._chunks.create_many(entities)
+
+        document.status = DocumentStatus.PROCESSED
+        await self._session.commit()
+        await self._session.refresh(document)
+        logger.info(
+            "Chunks stored for document_id=%s count=%s",
+            document.id,
+            len(entities),
+        )
+        return document
 
     async def get_chunks(self, document_id: UUID) -> list[DocumentChunk]:
         document = await self._documents.get_by_id(document_id)
