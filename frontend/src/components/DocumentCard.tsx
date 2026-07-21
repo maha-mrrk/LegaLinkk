@@ -6,7 +6,7 @@ import type { ActivityItem } from '@/types'
 
 export function DocumentCard({ item }: { item: ActivityItem }) {
   return (
-    <Link to={`/analysis/d1`} className="block">
+    <Link to={`/analysis/${item.id}`} className="block">
       <Card
         padding="sm"
         className="group flex items-start gap-3 hover:shadow-md hover:border-brand/20 transition-all duration-200"

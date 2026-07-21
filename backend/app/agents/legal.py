@@ -8,6 +8,7 @@ adds a legal system prompt, a rule-based risk classifier, and structured output.
 from __future__ import annotations
 
 from typing import Any, Sequence
+from uuid import UUID
 
 from app.agents.base import AgentContext, AgentResult, BaseAgent
 from app.agents.intent import DOMAIN_KEYWORDS
@@ -91,6 +92,7 @@ class LegalAgent(BaseAgent):
         temperature: float | None = None,
         max_tokens: int | None = None,
         history: Sequence[dict[str, str]] | None = None,
+        document_id: UUID | None = None,
     ) -> dict[str, Any]:
         """Run the full legal analysis and return the structured payload."""
         logger.info("Legal analysis started.")
@@ -103,6 +105,7 @@ class LegalAgent(BaseAgent):
             temperature=temperature,
             max_tokens=max_tokens,
             history=history,
+            document_id=document_id,
             system_prompt=LEGAL_SYSTEM_PROMPT,
         )
 

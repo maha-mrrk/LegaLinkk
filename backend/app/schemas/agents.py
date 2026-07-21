@@ -41,6 +41,10 @@ class LegalAnalyzeRequest(BaseModel):
         default=None,
         description="Optional conversation to pull history from (references only)",
     )
+    document_id: UUID | None = Field(
+        default=None,
+        description="Optional: restrict the analysis to a single contract",
+    )
     top_k: int | None = Field(default=None, ge=1, le=50)
     final_k: int | None = Field(default=None, ge=1, le=50)
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)

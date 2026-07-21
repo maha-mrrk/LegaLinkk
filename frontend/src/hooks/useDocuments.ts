@@ -1,10 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  fetchAnalysis,
-  fetchDocuments,
-  fetchRecentActivity,
-  uploadDocument,
-} from '@/services/documents'
+import { analyzeContract } from '@/services/analysis'
+import { fetchDocuments, fetchRecentActivity, uploadDocument } from '@/services/documents'
 
 export function useDocuments() {
   return useQuery({
@@ -20,11 +16,14 @@ export function useRecentActivity() {
   })
 }
 
-export function useAnalysis(id: string) {
+/** Runs the legal analysis for a given contract (backend legal assistant). */
+export function useLegalAnalysis(documentId: string | undefined) {
   return useQuery({
-    queryKey: ['analysis', id],
-    queryFn: () => fetchAnalysis(id),
-    enabled: Boolean(id),
+    queryKey: ['legal-analysis', documentId],
+    queryFn: () => analyzeContract({ documentId }),
+    enabled: Boolean(documentId),
+    staleTime: 5 * 60_000,
+    retry: 0,
   })
 }
 

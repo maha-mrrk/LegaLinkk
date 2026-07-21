@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Download, Eye, FileText, Trash2 } from 'lucide-react'
+import { Eye, FileText } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
 import { SearchBar } from '@/components/SearchBar'
@@ -82,7 +82,7 @@ export function HistoryPage() {
                   <th className="px-4 py-3 font-medium">Fichier</th>
                   <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Date</th>
-                  <th className="px-4 py-3 font-medium">Agents</th>
+                  <th className="px-4 py-3 font-medium">Assistants</th>
                   <th className="px-4 py-3 font-medium">Score</th>
                   <th className="px-4 py-3 font-medium">Statut</th>
                   <th className="px-4 py-3 font-medium text-right">Actions</th>
@@ -129,12 +129,6 @@ export function HistoryPage() {
                             <Eye className="size-4" />
                           </Button>
                         </Link>
-                        <Button variant="ghost" size="sm" aria-label="Télécharger">
-                          <Download className="size-4" />
-                        </Button>
-                        <Button variant="ghost" size="sm" aria-label="Supprimer">
-                          <Trash2 className="size-4 text-danger" />
-                        </Button>
                       </div>
                     </td>
                   </tr>

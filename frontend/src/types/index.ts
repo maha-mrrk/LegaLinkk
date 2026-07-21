@@ -54,12 +54,54 @@ export interface MonthlyAnalysis {
 export interface DocumentItem {
   id: string
   filename: string
-  type: AnalysisCategory
+  type: AnalysisCategory | string
   date: string
   agents: string[]
   score: number
   status: DocumentStatus
   pageCount?: number
+  indexed?: boolean
+}
+
+export interface LegalSource {
+  document_id: string
+  filename?: string
+  page?: number | null
+  chunk_id?: string
+  score?: number
+  page_numbers?: number[]
+}
+
+export interface LegalRiskFinding {
+  level: RiskLevel
+  category: string
+  detail: string
+}
+
+export interface LegalAnalysis {
+  analysis: string
+  risk_level: RiskLevel
+  missing_information: string[]
+  sources: LegalSource[]
+  recommendations: string[]
+  metadata?: {
+    risk_findings?: LegalRiskFinding[]
+    [key: string]: unknown
+  }
+}
+
+export interface ChatSourceRef {
+  document_id: string
+  filename?: string
+  page?: number | null
+  chunk_id?: string
+  score?: number
+}
+
+export interface ChatAnswer {
+  answer: string
+  sources: ChatSourceRef[]
+  metadata?: Record<string, unknown>
 }
 
 export interface ChatMessage {
@@ -136,9 +178,9 @@ export interface PipelineRun {
   activeStageDetail: string
   events: PipelineEvent[]
   consumption: {
-    model: string
-    inputTokens: number
-    outputTokens: number
+    pagesAnalyzed: number
+    sectionsReviewed: number
+    processingTime: string
     estimatedCost: string
   }
 }

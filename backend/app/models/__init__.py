@@ -8,6 +8,7 @@ from app.models.chunk import DocumentChunk
 from app.models.conversation import Conversation, Message, MessageRole
 from app.models.document import Document, DocumentStatus, ExtractionMethod
 from app.models.embedding import ChunkEmbedding, DocumentEmbedding, IndexStatus
+from app.models.user import User
 
 __all__ = [
     "Base",
@@ -21,4 +22,5 @@ __all__ = [
     "IndexStatus",
     "Message",
     "MessageRole",
+    "User",
 ]

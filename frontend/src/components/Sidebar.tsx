@@ -3,25 +3,20 @@ import {
   LayoutDashboard,
   MessageSquarePlus,
   FileText,
-  BarChart3,
   Clock,
-  Bot,
-  Activity,
   Settings,
   Scale,
+  LogOut,
   X,
 } from 'lucide-react'
-import { currentUser } from '@/data/mock'
+import { useAuth } from '@/context/AuthContext'
 import { cn } from '@/lib/cn'
 
 const navItems = [
   { to: '/dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
   { to: '/consultation', label: 'Nouvelle consultation', icon: MessageSquarePlus },
   { to: '/documents', label: 'Mes contrats', icon: FileText },
-  { to: '/analysis/d1', label: 'Rapports', icon: BarChart3 },
   { to: '/history', label: 'Historique', icon: Clock },
-  { to: '/agents/ag1', label: 'Agents IA', icon: Bot },
-  { to: '/supervision', label: 'Supervision', icon: Activity },
   { to: '/settings', label: 'Paramètres', icon: Settings },
 ]
 
@@ -31,6 +26,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
+  const { user, initials, logout } = useAuth()
   return (
     <>
       <div
@@ -54,7 +50,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             <div>
               <p className="text-base font-bold tracking-tight">LegalLink</p>
               <p className="text-[10px] font-medium uppercase tracking-wider text-slate-400">
-                Legal AI
+                Intelligence juridique
               </p>
             </div>
           </div>
@@ -104,12 +100,23 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         <div className="border-t border-white/10 p-4">
           <div className="flex items-center gap-3 rounded-xl bg-white/5 p-3">
             <div className="flex size-10 items-center justify-center rounded-full bg-brand text-sm font-semibold">
-              {currentUser.initials}
+              {initials || '—'}
             </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{currentUser.name}</p>
-              <p className="truncate text-xs text-slate-400">{currentUser.role}</p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">
+                {user?.full_name || user?.email || 'Utilisateur'}
+              </p>
+              <p className="truncate text-xs text-slate-400">{user?.role}</p>
             </div>
+            <button
+              type="button"
+              onClick={logout}
+              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+              aria-label="Se déconnecter"
+              title="Se déconnecter"
+            >
+              <LogOut className="size-4" />
+            </button>
           </div>
         </div>
       </aside>

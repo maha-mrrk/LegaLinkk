@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # Conversation memory (recent turns injected into the prompt)
     conversation_history_limit: int = 10
 
+    # Authentication (JWT)
+    jwt_secret: str = "change-me-in-production-please-use-a-long-random-secret"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60 * 24  # 24h
+
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024

@@ -1,42 +1,82 @@
 import { useState } from 'react'
-import { Paperclip, Send, Sparkles } from 'lucide-react'
+import { Loader2, Paperclip, Send, Sparkles } from 'lucide-react'
 import { UploadZone } from '@/components/UploadZone'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { chatMessages, suggestions } from '@/data/mock'
+import { suggestions } from '@/data/mock'
 import { useUploadDocument } from '@/hooks/useDocuments'
+import { askQuestion } from '@/services/chat'
 import { cn } from '@/lib/cn'
 import type { ChatMessage } from '@/types'
 
+const WELCOME: ChatMessage = {
+  id: 'welcome',
+  role: 'assistant',
+  content:
+    'Bonjour. Déposez un contrat ou posez une question juridique — je peux résumer, détecter les risques et citer les références applicables.',
+  timestamp: '',
+}
+
+function nowLabel(): string {
+  return new Date().toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export function ConsultationPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>(chatMessages)
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME])
   const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
   const upload = useUploadDocument()
 
-  const send = (content: string) => {
+  const send = async (content: string) => {
     const trimmed = content.trim()
-    if (!trimmed) return
+    if (!trimmed || sending) return
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content: trimmed,
-      timestamp: new Date().toLocaleTimeString('fr-FR', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      timestamp: nowLabel(),
     }
-    const reply: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'assistant',
-      content:
-        'Reçu. Dès que le backend conversationnel sera branché, je traiterai cette demande avec le contexte du document uploadé.',
-      timestamp: new Date().toLocaleTimeString('fr-FR', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-    }
-    setMessages((prev) => [...prev, userMsg, reply])
+    setMessages((prev) => [...prev, userMsg])
     setDraft('')
+    setSending(true)
+
+    try {
+      const result = await askQuestion(trimmed)
+      const cited = (result.sources ?? [])
+        .map((s) => s.filename)
+        .filter((v, i, arr): v is string => Boolean(v) && arr.indexOf(v) === i)
+      const suffix = cited.length
+        ? `\n\nSources : ${cited.join(', ')}`
+        : ''
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: (result.answer || 'Aucune réponse disponible.') + suffix,
+          timestamp: nowLabel(),
+        },
+      ])
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content:
+            err instanceof Error
+              ? `Désolé, une erreur est survenue : ${err.message}`
+              : 'Désolé, une erreur est survenue.',
+          timestamp: nowLabel(),
+        },
+      ])
+    } finally {
+      setSending(false)
+    }
   }
 
   return (
@@ -47,7 +87,7 @@ export function ConsultationPage() {
             Assistant LegalLink
           </h2>
           <p className="text-xs text-muted">
-            Posez une question ou uploadez un contrat pour démarrer
+            Posez une question ou déposez un contrat pour démarrer
           </p>
         </div>
 
@@ -110,9 +150,16 @@ export function ConsultationPage() {
               size="sm"
               className="rounded-xl"
               onClick={() => send(draft)}
-              leftIcon={<Send className="size-4" />}
+              disabled={sending || !draft.trim()}
+              leftIcon={
+                sending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Send className="size-4" />
+                )
+              }
             >
-              Envoyer
+              {sending ? 'Analyse…' : 'Envoyer'}
             </Button>
           </div>
         </div>
@@ -131,7 +178,7 @@ export function ConsultationPage() {
             }}
           />
           {upload.isPending ? (
-            <p className="mt-3 text-xs text-brand">Upload en cours…</p>
+            <p className="mt-3 text-xs text-brand">Envoi en cours…</p>
           ) : null}
           {upload.isSuccess ? (
             <p className="mt-3 text-xs text-success">

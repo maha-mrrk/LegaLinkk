@@ -17,7 +17,7 @@ export function DocumentsPage() {
       <Card className="lg:col-span-1" padding="lg">
         <CardHeader
           title="Importer un contrat"
-          subtitle="Connecté à POST /api/v1/documents (mock actif)"
+          subtitle="Formats acceptés : PDF · jusqu’à 25 Mo"
         />
         <UploadZone
           onFiles={(files) => {
@@ -42,7 +42,7 @@ export function DocumentsPage() {
         ) : !data?.length ? (
           <EmptyState
             title="Aucun contrat"
-            description="Uploadez votre premier PDF pour démarrer une analyse."
+            description="Déposez votre premier contrat (PDF) pour démarrer une analyse."
             icon={<Upload className="size-6" />}
           />
         ) : (

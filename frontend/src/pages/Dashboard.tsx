@@ -1,92 +1,101 @@
-import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
-import { CategoryDonut } from '@/components/charts/CategoryDonut'
-import { MonthlyBarChart } from '@/components/charts/MonthlyBarChart'
-import { StatSparkline } from '@/components/charts/StatSparkline'
+import { useMemo } from 'react'
+import { CheckCircle2, Clock, FileText, XCircle } from 'lucide-react'
 import { DocumentCard } from '@/components/DocumentCard'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
 import { Card, CardHeader } from '@/components/ui/Card'
-import {
-  analysisCategories,
-  dashboardStats,
-  monthlyAnalyses,
-} from '@/data/mock'
-import { useRecentActivity } from '@/hooks/useDocuments'
-import { cn } from '@/lib/cn'
+import { useDocuments, useRecentActivity } from '@/hooks/useDocuments'
 
 export function DashboardPage() {
+  const { data: documents } = useDocuments()
   const { data: activity, isLoading } = useRecentActivity()
+
+  const stats = useMemo(() => {
+    const list = documents ?? []
+    return {
+      total: list.length,
+      ready: list.filter((d) => d.indexed).length,
+      processing: list.filter(
+        (d) => d.status === 'processing' || d.status === 'pending',
+      ).length,
+      failed: list.filter((d) => d.status === 'failed').length,
+    }
+  }, [documents])
+
+  const cards = [
+    {
+      label: 'Contrats déposés',
+      value: stats.total,
+      icon: FileText,
+      color: 'text-brand',
+      bg: 'bg-brand-soft',
+    },
+    {
+      label: 'Prêts à analyser',
+      value: stats.ready,
+      icon: CheckCircle2,
+      color: 'text-success',
+      bg: 'bg-emerald-50',
+    },
+    {
+      label: 'En traitement',
+      value: stats.processing,
+      icon: Clock,
+      color: 'text-warning',
+      bg: 'bg-amber-50',
+    },
+    {
+      label: 'Échecs',
+      value: stats.failed,
+      icon: XCircle,
+      color: 'text-danger',
+      bg: 'bg-red-50',
+    },
+  ]
 
   return (
     <div className="space-y-6">
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {dashboardStats.map((stat, index) => (
+        {cards.map((stat) => (
           <Card
-            key={stat.id}
-            className="hover:-translate-y-0.5 hover:shadow-md transition-all duration-300"
-            style={{ animationDelay: `${index * 60}ms` }}
+            key={stat.label}
+            className="transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
           >
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-xs font-medium text-muted">{stat.label}</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {stat.value}
-                </p>
+            <div className="flex items-center gap-4">
+              <div
+                className={`flex size-11 shrink-0 items-center justify-center rounded-xl ${stat.bg} ${stat.color}`}
+              >
+                <stat.icon className="size-5" />
               </div>
-              <StatSparkline
-                data={stat.sparkline}
-                color={stat.trendUp ? '#22C55E' : '#EF4444'}
-              />
-            </div>
-            <div
-              className={cn(
-                'mt-3 inline-flex items-center gap-1 text-xs font-medium',
-                stat.trendUp ? 'text-success' : 'text-danger',
-              )}
-            >
-              {stat.trendUp ? (
-                <ArrowUpRight className="size-3.5" />
-              ) : (
-                <ArrowDownRight className="size-3.5" />
-              )}
-              {stat.trend} vs mois dernier
+              <div>
+                <p className="text-2xl font-bold text-slate-900">{stat.value}</p>
+                <p className="text-xs font-medium text-muted">{stat.label}</p>
+              </div>
             </div>
           </Card>
         ))}
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-5">
-        <Card className="lg:col-span-3" padding="lg">
+      <section>
+        <Card padding="lg">
           <CardHeader
             title="Activité récente"
-            subtitle="Derniers documents traités par le pipeline"
+            subtitle="Vos derniers contrats traités"
           />
           {isLoading ? (
             <LoadingSpinner label="Chargement de l’activité…" />
-          ) : (
-            <div className="space-y-3">
-              {(activity ?? []).map((item) => (
+          ) : activity && activity.length ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {activity.map((item) => (
                 <DocumentCard key={item.id} item={item} />
               ))}
             </div>
+          ) : (
+            <p className="py-8 text-center text-sm text-muted">
+              Aucun contrat pour le moment. Déposez votre premier contrat pour
+              démarrer.
+            </p>
           )}
         </Card>
-
-        <div className="space-y-6 lg:col-span-2">
-          <Card padding="lg">
-            <CardHeader
-              title="Répartition des analyses"
-              subtitle="Par domaine juridique"
-            />
-            <CategoryDonut data={analysisCategories} />
-          </Card>
-          <Card padding="lg">
-            <CardHeader
-              title="Analyses par mois"
-              subtitle="Volume sur 7 mois"
-            />
-            <MonthlyBarChart data={monthlyAnalyses} />
-          </Card>
-        </div>
       </section>
     </div>
   )

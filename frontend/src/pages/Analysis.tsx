@@ -1,35 +1,69 @@
-import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useMemo, useState, type ReactNode } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   AlertTriangle,
-  Download,
+  CheckCircle2,
   FileText,
-  Share2,
+  HelpCircle,
 } from 'lucide-react'
 import { ScoreGauge } from '@/components/charts/ScoreGauge'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
 import { RiskBadge } from '@/components/StatusBadge'
-import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { useAnalysis } from '@/hooks/useDocuments'
+import { useDocuments, useLegalAnalysis } from '@/hooks/useDocuments'
 import { cn } from '@/lib/cn'
+import type { RiskLevel } from '@/types'
 
 const tabs = [
   'Résumé',
   'Points critiques',
-  'Analyse juridique',
-  'Analyse financière',
-  'Conformité',
+  'Informations manquantes',
   'Recommandations',
+  'Sources',
 ]
 
-export function AnalysisPage() {
-  const { id = 'd1' } = useParams()
-  const { data, isLoading } = useAnalysis(id)
-  const [activeTab, setActiveTab] = useState('Points critiques')
+const RISK_META: Record<RiskLevel, { score: number; label: string }> = {
+  low: { score: 85, label: 'Risque faible' },
+  medium: { score: 58, label: 'Risque modéré' },
+  high: { score: 32, label: 'Risque élevé' },
+}
 
-  if (isLoading || !data) {
-    return <LoadingSpinner label="Chargement de l’analyse…" />
+export function AnalysisPage() {
+  const { id = '' } = useParams()
+  const { data: documents } = useDocuments()
+  const { data, isLoading, isError, error } = useLegalAnalysis(id)
+  const [activeTab, setActiveTab] = useState('Résumé')
+
+  const document = useMemo(
+    () => documents?.find((d) => d.id === id),
+    [documents, id],
+  )
+
+  const findings = data?.metadata?.risk_findings ?? []
+  const risk = data ? RISK_META[data.risk_level] : RISK_META.medium
+
+  if (isLoading) {
+    return (
+      <LoadingSpinner label="Analyse du contrat en cours… cela peut prendre un instant." />
+    )
+  }
+
+  if (isError || !data) {
+    return (
+      <Card padding="lg">
+        <div className="flex flex-col items-center gap-3 py-10 text-center">
+          <AlertTriangle className="size-8 text-danger" />
+          <h2 className="text-lg font-semibold text-slate-900">
+            Analyse indisponible
+          </h2>
+          <p className="max-w-md text-sm text-muted">
+            {error instanceof Error
+              ? error.message
+              : "Impossible d'analyser ce contrat pour le moment."}
+          </p>
+        </div>
+      </Card>
+    )
   }
 
   return (
@@ -42,18 +76,13 @@ export function AnalysisPage() {
             </div>
             <div>
               <h2 className="text-lg font-semibold text-slate-900">
-                {data.document.filename}
+                {document?.filename ?? 'Contrat'}
               </h2>
               <p className="mt-0.5 text-sm text-muted">
-                {data.document.pageCount} pages · {data.document.date}
+                {document?.pageCount ? `${document.pageCount} pages · ` : ''}
+                {document?.date ?? ''}
               </p>
             </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" leftIcon={<Share2 className="size-4" />}>
-              Partager
-            </Button>
-            <Button leftIcon={<Download className="size-4" />}>Télécharger</Button>
           </div>
         </div>
 
@@ -80,116 +109,165 @@ export function AnalysisPage() {
         <div className="space-y-3 lg:col-span-2">
           {activeTab === 'Résumé' ? (
             <Card padding="lg">
-              <CardHeader title="Résumé exécutif" />
-              <p className="text-sm leading-relaxed text-slate-700">
-                {data.summary}
+              <CardHeader title="Analyse juridique" />
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                {data.analysis}
               </p>
             </Card>
           ) : null}
 
-          {activeTab === 'Points critiques' ||
-          !['Résumé', 'Points critiques'].includes(activeTab) ? (
-            <>
-              {activeTab !== 'Points critiques' ? (
-                <Card padding="lg">
-                  <p className="text-sm text-muted">
-                    Contenu « {activeTab} » — prêt à être branché sur l’API
-                    d’analyse.
-                  </p>
-                </Card>
-              ) : null}
-              {activeTab === 'Points critiques'
-                ? data.criticalPoints.map((point) => (
-                    <Card
-                      key={point.id}
-                      className="hover:border-brand/20 hover:shadow-md transition-all duration-200"
-                      padding="lg"
+          {activeTab === 'Points critiques' ? (
+            findings.length ? (
+              findings.map((point, index) => (
+                <Card
+                  key={`${point.category}-${index}`}
+                  className="transition-all duration-200 hover:border-brand/20 hover:shadow-md"
+                  padding="lg"
+                >
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={cn(
+                        'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg',
+                        point.level === 'high'
+                          ? 'bg-red-50 text-danger'
+                          : point.level === 'medium'
+                            ? 'bg-amber-50 text-warning'
+                            : 'bg-emerald-50 text-success',
+                      )}
                     >
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={cn(
-                            'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg',
-                            point.risk === 'high'
-                              ? 'bg-red-50 text-danger'
-                              : 'bg-amber-50 text-warning',
-                          )}
-                        >
-                          <AlertTriangle className="size-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-sm font-semibold text-slate-900">
-                              {point.title}
-                            </h3>
-                            <RiskBadge risk={point.risk} />
-                          </div>
-                          <p className="mt-1.5 text-sm text-slate-600">
-                            {point.description}
-                          </p>
-                          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-                            <span className="font-medium text-brand">
-                              {point.reference}
-                            </span>
-                            <span className="text-muted">p. {point.page}</span>
-                          </div>
-                          <button
-                            type="button"
-                            className="mt-2 text-xs font-medium text-brand hover:underline"
-                          >
-                            Voir →
-                          </button>
-                        </div>
+                      <AlertTriangle className="size-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-slate-900">
+                          {point.category}
+                        </h3>
+                        <RiskBadge risk={point.level} />
                       </div>
-                    </Card>
-                  ))
-                : null}
-            </>
+                      <p className="mt-1.5 text-sm text-slate-600">
+                        {point.detail}
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              ))
+            ) : (
+              <EmptyState
+                icon={<CheckCircle2 className="size-6 text-success" />}
+                text="Aucun point critique majeur détecté."
+              />
+            )
+          ) : null}
+
+          {activeTab === 'Informations manquantes' ? (
+            data.missing_information.length ? (
+              <Card padding="lg">
+                <CardHeader title="Éléments manquants ou ambigus" />
+                <ul className="space-y-2.5">
+                  {data.missing_information.map((item, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm text-slate-700">
+                      <HelpCircle className="mt-0.5 size-4 shrink-0 text-warning" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ) : (
+              <EmptyState
+                icon={<CheckCircle2 className="size-6 text-success" />}
+                text="Aucune information manquante identifiée."
+              />
+            )
+          ) : null}
+
+          {activeTab === 'Recommandations' ? (
+            data.recommendations.length ? (
+              <Card padding="lg">
+                <CardHeader title="Recommandations" />
+                <ul className="space-y-2.5">
+                  {data.recommendations.map((item, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm text-slate-700">
+                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-brand" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ) : (
+              <EmptyState
+                icon={<CheckCircle2 className="size-6 text-success" />}
+                text="Aucune recommandation particulière."
+              />
+            )
+          ) : null}
+
+          {activeTab === 'Sources' ? (
+            data.sources.length ? (
+              <Card padding="lg">
+                <CardHeader title="Passages de référence" />
+                <div className="space-y-2">
+                  {data.sources.map((source, index) => (
+                    <div
+                      key={source.chunk_id ?? index}
+                      className="flex items-center justify-between rounded-lg border border-border bg-slate-50 px-3 py-2.5 text-sm"
+                    >
+                      <span className="min-w-0 truncate font-medium text-slate-700">
+                        {source.filename ?? 'Document'}
+                      </span>
+                      <span className="ml-3 shrink-0 text-xs text-muted">
+                        {source.page ? `p. ${source.page}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ) : (
+              <EmptyState
+                icon={<FileText className="size-6 text-muted" />}
+                text="Aucune source disponible."
+              />
+            )
           ) : null}
         </div>
 
         <div className="space-y-4">
           <Card padding="lg">
-            <CardHeader title="Score global" />
-            <ScoreGauge score={data.score} label={data.riskLabel} />
+            <CardHeader title="Niveau de risque" />
+            <ScoreGauge score={risk.score} label={risk.label} />
             <div className="mt-6 grid grid-cols-2 gap-3">
-              <Metric label="Conformité" value={`${data.complianceRate}%`} />
+              <Metric label="Points critiques" value={String(findings.length)} />
               <Metric
-                label="Clauses analysées"
-                value={String(data.clausesAnalyzed)}
+                label="Passages examinés"
+                value={String(data.sources.length)}
               />
               <Metric
-                label="Références juridiques"
-                value={String(data.legalReferences)}
+                label="Éléments manquants"
+                value={String(data.missing_information.length)}
                 className="col-span-2"
               />
             </div>
           </Card>
 
           <Card padding="lg">
-            <CardHeader title="Agents impliqués" />
-            <div className="flex flex-wrap gap-3">
-              {data.agents.map((agent) => (
-                <Link
-                  key={agent.id}
-                  to={`/agents/${agent.id}`}
-                  className="group flex flex-col items-center gap-1.5"
-                >
-                  <div
-                    className="flex size-11 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm transition group-hover:scale-105"
-                    style={{ backgroundColor: agent.color }}
-                  >
-                    {agent.initials}
-                  </div>
-                  <span className="text-[11px] text-muted group-hover:text-brand">
-                    {agent.name}
-                  </span>
-                </Link>
-              ))}
+            <CardHeader title="Niveau de risque global" />
+            <div className="flex items-center justify-center py-2">
+              <RiskBadge risk={data.risk_level} />
             </div>
           </Card>
         </div>
       </div>
     </div>
+  )
+}
+
+function EmptyState({ icon, text }: { icon: ReactNode; text: string }) {
+  return (
+    <Card padding="lg">
+      <div className="flex flex-col items-center gap-2 py-8 text-center">
+        {icon}
+        <p className="text-sm text-muted">{text}</p>
+      </div>
+    </Card>
   )
 }
 
@@ -203,12 +281,7 @@ function Metric({
   className?: string
 }) {
   return (
-    <div
-      className={cn(
-        'rounded-xl bg-slate-50 px-3 py-3 text-center',
-        className,
-      )}
-    >
+    <div className={cn('rounded-xl bg-slate-50 px-3 py-3 text-center', className)}>
       <p className="text-lg font-bold text-slate-900">{value}</p>
       <p className="text-[11px] text-muted">{label}</p>
     </div>

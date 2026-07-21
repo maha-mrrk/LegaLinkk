@@ -16,6 +16,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        // Legal analysis / chat can take a couple of minutes (model loading).
+        timeout: 600_000,
+        proxyTimeout: 600_000,
       },
     },
   },

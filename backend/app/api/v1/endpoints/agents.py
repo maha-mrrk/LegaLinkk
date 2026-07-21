@@ -89,5 +89,6 @@ async def legal_analyze(
         temperature=body.temperature,
         max_tokens=body.max_tokens,
         history=history,
+        document_id=body.document_id,
     )
     return LegalAnalysisResponse.model_validate(payload)

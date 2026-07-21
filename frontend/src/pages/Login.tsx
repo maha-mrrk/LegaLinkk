@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import {
+  AlertCircle,
   CheckCircle2,
   Eye,
   EyeOff,
@@ -10,38 +11,61 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react'
+import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 
 interface LoginForm {
   email: string
   password: string
+  full_name?: string
 }
+
+type Mode = 'login' | 'register'
 
 const features = [
   'Analyse juridique intelligente',
   'Détection automatique des risques',
-  'Supervision du pipeline IA',
+  'Suivi des analyses en temps réel',
   'Rapports exportables en un clic',
 ]
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const auth = useAuth()
   const [showPassword, setShowPassword] = useState(false)
+  const [mode, setMode] = useState<Mode>('login')
+  const [formError, setFormError] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<LoginForm>({
     defaultValues: {
-      email: 'reda.elamrani@legallink.ma',
-      password: 'demo1234',
+      email: '',
+      password: '',
+      full_name: '',
     },
   })
 
-  const onSubmit = async () => {
-    await new Promise((r) => setTimeout(r, 500))
-    navigate('/dashboard')
+  const onSubmit = async (values: LoginForm) => {
+    setFormError(null)
+    try {
+      if (mode === 'register') {
+        await auth.register({
+          email: values.email,
+          password: values.password,
+          full_name: values.full_name?.trim() || undefined,
+        })
+      } else {
+        await auth.login(values.email, values.password)
+      }
+      navigate('/dashboard')
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : 'Une erreur est survenue',
+      )
+    }
   }
 
   return (
@@ -62,12 +86,12 @@ export function LoginPage() {
             <div>
               <p className="text-xl font-bold">LegalLink</p>
               <p className="text-xs uppercase tracking-widest text-slate-400">
-                Legal Intelligence
+                Intelligence juridique
               </p>
             </div>
           </div>
           <h1 className="mt-16 max-w-md text-4xl font-bold leading-tight">
-            Analysez vos contrats avec la précision d’un cabinet, à la vitesse de l’IA.
+            Analysez vos contrats avec la précision d’un cabinet, à la vitesse du numérique.
           </h1>
           <ul className="mt-10 space-y-4">
             {features.map((feature) => (
@@ -96,15 +120,36 @@ export function LoginPage() {
           <div className="mb-8">
             <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-3 py-1 text-xs font-medium text-brand">
               <Sparkles className="size-3.5" />
-              Plateforme juridique IA
+              Plateforme juridique intelligente
             </div>
-            <h2 className="text-3xl font-bold text-slate-900">Bienvenue !</h2>
+            <h2 className="text-3xl font-bold text-slate-900">
+              {mode === 'register' ? 'Créer un compte' : 'Bienvenue !'}
+            </h2>
             <p className="mt-2 text-sm text-muted">
-              Connectez-vous pour accéder à vos analyses et consultations.
+              {mode === 'register'
+                ? 'Renseignez vos informations pour créer votre espace LegalLink.'
+                : 'Connectez-vous pour accéder à vos analyses et consultations.'}
             </p>
           </div>
 
           <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
+            {formError ? (
+              <div className="flex items-start gap-2 rounded-lg border border-danger/30 bg-red-50 px-3 py-2.5 text-sm text-danger">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                <span>{formError}</span>
+              </div>
+            ) : null}
+            {mode === 'register' ? (
+              <Input
+                label="Nom complet"
+                type="text"
+                placeholder="Me. Prénom Nom"
+                error={errors.full_name?.message}
+                {...register('full_name', {
+                  required: 'Nom requis',
+                })}
+              />
+            ) : null}
             <Input
               label="Adresse e-mail"
               type="email"
@@ -119,17 +164,9 @@ export function LoginPage() {
               })}
             />
             <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <label className="text-sm font-medium text-slate-700">
-                  Mot de passe
-                </label>
-                <button
-                  type="button"
-                  className="text-xs font-medium text-brand hover:underline"
-                >
-                  Mot de passe oublié ?
-                </button>
-              </div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                Mot de passe
+              </label>
               <Input
                 type={showPassword ? 'text' : 'password'}
                 placeholder="••••••••"
@@ -155,32 +192,46 @@ export function LoginPage() {
               />
             </div>
             <Button type="submit" className="w-full" size="lg" disabled={isSubmitting}>
-              {isSubmitting ? 'Connexion…' : 'Se connecter'}
+              {isSubmitting
+                ? mode === 'register'
+                  ? 'Création…'
+                  : 'Connexion…'
+                : mode === 'register'
+                  ? 'Créer mon compte'
+                  : 'Se connecter'}
             </Button>
           </form>
 
-          <div className="my-6 flex items-center gap-3 text-xs text-muted">
-            <div className="h-px flex-1 bg-border" />
-            ou continuer avec
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Button type="button" variant="secondary" className="w-full">
-              <GoogleIcon />
-              Google
-            </Button>
-            <Button type="button" variant="secondary" className="w-full">
-              <MicrosoftIcon />
-              Microsoft
-            </Button>
-          </div>
-
           <p className="mt-8 text-center text-sm text-muted">
-            Pas encore de compte ?{' '}
-            <Link to="/dashboard" className="font-medium text-brand hover:underline">
-              Créer un compte
-            </Link>
+            {mode === 'register' ? (
+              <>
+                Vous avez déjà un compte ?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login')
+                    setFormError(null)
+                  }}
+                  className="font-medium text-brand hover:underline"
+                >
+                  Se connecter
+                </button>
+              </>
+            ) : (
+              <>
+                Pas encore de compte ?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('register')
+                    setFormError(null)
+                  }}
+                  className="font-medium text-brand hover:underline"
+                >
+                  Créer un compte
+                </button>
+              </>
+            )}
           </p>
 
           <div className="mt-6 flex items-center justify-center gap-2 text-xs text-muted">
@@ -190,27 +241,5 @@ export function LoginPage() {
         </div>
       </main>
     </div>
-  )
-}
-
-function GoogleIcon() {
-  return (
-    <svg className="size-4" viewBox="0 0 24 24" aria-hidden>
-      <path
-        fill="#EA4335"
-        d="M12 10.2v3.9h5.5c-.2 1.3-1.6 3.8-5.5 3.8-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.9 3.3 14.7 2.4 12 2.4 6.9 2.4 2.7 6.6 2.7 11.7S6.9 21 12 21c5.2 0 8.6-3.6 8.6-8.7 0-.6-.1-1-.2-1.4H12z"
-      />
-    </svg>
-  )
-}
-
-function MicrosoftIcon() {
-  return (
-    <svg className="size-4" viewBox="0 0 24 24" aria-hidden>
-      <path fill="#F25022" d="M3 3h8.5v8.5H3z" />
-      <path fill="#7FBA00" d="M12.5 3H21v8.5h-8.5z" />
-      <path fill="#00A4EF" d="M3 12.5h8.5V21H3z" />
-      <path fill="#FFB900" d="M12.5 12.5H21V21h-8.5z" />
-    </svg>
   )
 }
