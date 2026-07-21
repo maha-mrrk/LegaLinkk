@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base import AgentContext, AgentResult, BaseAgent
 from app.agents.intent import IntentRouter
-from app.agents.placeholder import ComplianceAgent, FinanceAgent, LegalAgent
+from app.agents.legal import LegalAgent
+from app.agents.placeholder import ComplianceAgent, FinanceAgent
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError, ValidationError
 from app.core.logging import get_logger

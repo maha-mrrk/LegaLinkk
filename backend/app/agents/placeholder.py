@@ -52,14 +52,6 @@ class _PlaceholderAgent(BaseAgent):
         )
 
 
-class LegalAgent(_PlaceholderAgent):
-    """Placeholder legal specialist."""
-
-    _agent_name = "LegalAgent"
-    _description = "Handles clauses, obligations, liabilities, and contractual questions."
-    _domain = "legal"
-
-
 class FinanceAgent(_PlaceholderAgent):
     """Placeholder finance specialist."""
 

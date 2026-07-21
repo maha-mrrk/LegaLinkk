@@ -61,8 +61,14 @@ class PromptBuilder:
         question: str,
         context: str,
         history: Sequence[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
     ) -> ChatPrompt:
-        system = SYSTEM_INSTRUCTIONS.format(no_answer=self._no_answer)
+        # Specialized agents may inject their own system prompt (e.g. LegalAgent),
+        # while still reusing the shared grounded-RAG user prompt structure.
+        if system_prompt and system_prompt.strip():
+            system = system_prompt.format(no_answer=self._no_answer)
+        else:
+            system = SYSTEM_INSTRUCTIONS.format(no_answer=self._no_answer)
         context_block = (context or "").strip()
         if not context_block:
             context_block = "(No retrieved context was available.)"

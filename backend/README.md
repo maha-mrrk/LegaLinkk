@@ -127,6 +127,7 @@ Copy `.env.example` to `.env` and adjust as needed:
 | `DELETE` | `/api/v1/chat/conversations/{id}` | Delete conversation |
 | `POST` | `/api/v1/chat/conversations/{id}/messages` | Multi-turn RAG message |
 | `POST` | `/api/v1/agents/query` | Multi-agent orchestration (intent → agents → aggregate) |
+| `POST` | `/api/v1/agents/legal/analyze` | LegalAgent contract analysis (structured output + risk level) |
 
 Validation rules:
 

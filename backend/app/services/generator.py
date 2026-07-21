@@ -80,6 +80,7 @@ class GeneratorService:
         max_tokens: int | None = None,
         document_id: UUID | None = None,
         history: Sequence[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
     ) -> dict[str, Any]:
         """Full RAG pipeline: embed → retrieve → rerank → LLM."""
         cleaned = (question or "").strip()
@@ -124,6 +125,7 @@ class GeneratorService:
             temperature=temperature,
             max_tokens=max_tokens,
             history=history,
+            system_prompt=system_prompt,
         )
         result["metadata"]["top_k"] = candidate_k
         result["metadata"]["final_k"] = keep_k
@@ -141,6 +143,7 @@ class GeneratorService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         history: Sequence[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
     ) -> dict[str, Any]:
         """Generate a grounded answer from already selected chunks.
 
@@ -156,11 +159,13 @@ class GeneratorService:
 
         if not context_chunks:
             logger.info("No context chunks — returning grounded no-answer.")
-            return self._empty_response(
+            result = self._empty_response(
                 answer=no_answer,
                 generation_time=round(time.perf_counter() - started, 3),
                 history_turns=len(history or []),
             )
+            result["context_text"] = ""
+            return result
 
         logger.info("Building prompt...")
         context_text, used_chunks = merge_chunks(
@@ -171,6 +176,7 @@ class GeneratorService:
             question=cleaned,
             context=context_text,
             history=history,
+            system_prompt=system_prompt,
         )
         sources = build_sources(used_chunks)
 
@@ -196,6 +202,8 @@ class GeneratorService:
         return {
             "answer": answer,
             "sources": sources,
+            # Internal reuse (e.g. LegalAgent risk rules); not exposed by chat API.
+            "context_text": context_text,
             "metadata": {
                 "provider": llm.provider_name,
                 "model": completion.model,
