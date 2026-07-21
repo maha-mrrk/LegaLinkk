@@ -36,6 +36,8 @@ class GeneratorNode(BaseGraphAgent):
         question = state.get("user_question") or ""
         metadata = ensure_metadata(state)
         history: Sequence[dict[str, str]] | None = metadata.get("history")
+        temperature = metadata.get("temperature")
+        max_tokens = metadata.get("max_tokens")
         reranked = state.get("reranked_chunks")
 
         if reranked:
@@ -44,6 +46,8 @@ class GeneratorNode(BaseGraphAgent):
                 question,
                 reranked,
                 history=history,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
         else:
             logger.info("GeneratorNode: running full RAG pipeline")
@@ -52,6 +56,8 @@ class GeneratorNode(BaseGraphAgent):
                 top_k=metadata.get("top_k"),
                 final_k=metadata.get("final_k"),
                 history=history,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
 
         state["llm_response"] = result.get("answer")

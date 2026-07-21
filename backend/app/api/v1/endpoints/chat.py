@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.graphs.rag_graph import build_rag_graph
 from app.schemas.chat import ChatQueryRequest, ChatQueryResponse
 from app.schemas.conversation import (
     ConversationCreateRequest,
@@ -134,19 +135,32 @@ async def post_conversation_message(
     response_model=ChatQueryResponse,
     summary="Ask a one-shot question (no conversation persistence)",
     description=(
-        "Runs the full RAG pipeline without storing conversation history. "
-        "Prefer POST /chat/conversations/{id}/messages for multi-turn chat."
+        "Runs the LangGraph RAG pipeline (embedding → retrieval → rerank → "
+        "generate) without storing conversation history. Prefer "
+        "POST /chat/conversations/{id}/messages for multi-turn chat."
     ),
 )
 async def chat_query(
     body: ChatQueryRequest,
-    service: GeneratorService = Depends(get_generator_service),
+    db: AsyncSession = Depends(get_db),
 ) -> ChatQueryResponse:
-    payload = await service.answer_question(
-        body.question,
-        top_k=body.top_k,
-        final_k=body.final_k,
-        temperature=body.temperature,
-        max_tokens=body.max_tokens,
-    )
+    graph = build_rag_graph(session=db)
+    initial_state = {
+        "user_question": body.question,
+        "metadata": {
+            "top_k": body.top_k,
+            "final_k": body.final_k,
+            "temperature": body.temperature,
+            "max_tokens": body.max_tokens,
+        },
+        "errors": [],
+    }
+    final_state = await graph.ainvoke(initial_state)
+
+    metadata = final_state.get("metadata") or {}
+    payload = {
+        "answer": final_state.get("llm_response") or "",
+        "sources": metadata.get("sources", []),
+        "metadata": metadata.get("generation", {}),
+    }
     return ChatQueryResponse.model_validate(payload)
