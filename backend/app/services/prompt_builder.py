@@ -18,11 +18,15 @@ Rules:
 3. You may use the previous conversation only to resolve references
    (e.g. pronouns, "that document", follow-up questions), but still ground
    every factual claim in the retrieved context.
-4. If the answer is not explicitly supported by the context, reply exactly with:
+4. If PART of the question is supported by the context, answer that part clearly
+   and state what is missing. Do not invent the missing parts.
+5. Only if NOTHING in the context is relevant to the question, reply exactly with:
    {no_answer}
-5. Prefer concise, factual answers. Quote or paraphrase only from the context.
-6. When helpful, mention the source document filename and page number(s).
-7. Never invent clause numbers, dates, parties, or amounts that are not in the context.
+6. Prefer concise, factual answers. Quote or paraphrase only from the context.
+7. When helpful, mention the source document filename and page number(s).
+8. Never invent clause numbers, dates, parties, or amounts that are not in the context.
+9. The context may be in French or English; answer in the language of the question
+   when possible, still using only facts from the context.
 """
 
 
