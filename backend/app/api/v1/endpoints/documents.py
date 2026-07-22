@@ -12,9 +12,11 @@ from app.schemas.document import (
     DocumentIndexResponse,
     DocumentIndexStatusResponse,
     DocumentListResponse,
+    DocumentProgressResponse,
     DocumentReindexResponse,
     DocumentResponse,
     DocumentStatusResponse,
+    DocumentUploadResponse,
 )
 from app.services.document import DocumentService
 from app.services.document_processing import DocumentProcessingService
@@ -39,20 +41,32 @@ def get_indexing_service(db: AsyncSession = Depends(get_db)) -> IndexingService:
 
 @router.post(
     "",
-    response_model=DocumentResponse,
-    status_code=status.HTTP_201_CREATED,
+    response_model=DocumentUploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Upload a PDF document",
     description=(
-        "Upload a PDF, then automatically run the preprocessing pipeline "
-        "(extract → clean → chunk → store)."
+        "Upload a PDF and immediately queue the processing pipeline "
+        "(extract → OCR → clean → chunk → embed → index) as a background task. "
+        "Returns instantly with a task id; poll GET /documents/{id}/progress for "
+        "live status."
     ),
 )
 async def upload_document(
     file: UploadFile = File(..., description="PDF file to upload"),
     service: DocumentService = Depends(get_document_service),
-) -> DocumentResponse:
-    document = await service.upload(file)
-    return DocumentResponse.model_validate(document)
+) -> DocumentUploadResponse:
+    result = await service.upload(file)
+    return DocumentUploadResponse(
+        document_id=result.document.id,
+        task_id=result.task_id,
+        status=result.document.status,
+        filename=result.document.original_filename,
+        message=(
+            "Upload received. Processing has started."
+            if result.task_id
+            else "Upload received, but processing could not be queued. Please retry."
+        ),
+    )
 
 
 @router.get(
@@ -109,21 +123,51 @@ async def get_document_status(
     )
 
 
+@router.get(
+    "/{document_id}/progress",
+    response_model=DocumentProgressResponse,
+    summary="Get live ingestion progress",
+    description=(
+        "Return the real-time progress of a document's background processing: "
+        "current stage, percentage, message, timeline, and any error. Poll this "
+        "endpoint while the document is being processed."
+    ),
+)
+async def get_document_progress(
+    document_id: UUID,
+    service: DocumentService = Depends(get_document_service),
+) -> DocumentProgressResponse:
+    payload = await service.get_progress(document_id)
+    return DocumentProgressResponse.model_validate(payload)
+
+
 @router.post(
     "/{document_id}/reprocess",
-    response_model=DocumentResponse,
+    response_model=DocumentUploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Re-run preprocessing for a document",
     description=(
-        "Re-run extract → clean → chunk (and optional auto-index) for an existing "
-        "document. Useful after a failed OCR/processing attempt."
+        "Re-queue the background pipeline (extract → clean → chunk → embed → "
+        "index) for an existing document. Useful after a failed processing "
+        "attempt. Returns immediately; poll GET /documents/{id}/progress."
     ),
 )
 async def reprocess_document(
     document_id: UUID,
-    processing: DocumentProcessingService = Depends(get_processing_service),
-) -> DocumentResponse:
-    document = await processing.process_document(document_id)
-    return DocumentResponse.model_validate(document)
+    service: DocumentService = Depends(get_document_service),
+) -> DocumentUploadResponse:
+    result = await service.reprocess(document_id)
+    return DocumentUploadResponse(
+        document_id=result.document.id,
+        task_id=result.task_id,
+        status=result.document.status,
+        filename=result.document.original_filename,
+        message=(
+            "Reprocessing has started."
+            if result.task_id
+            else "Could not queue reprocessing. Please retry."
+        ),
+    )
 
 
 @router.post(

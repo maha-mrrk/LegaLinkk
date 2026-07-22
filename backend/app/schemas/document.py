@@ -56,6 +56,48 @@ class DocumentStatusResponse(BaseModel):
     chunk_count: int = 0
 
 
+class DocumentUploadResponse(BaseModel):
+    """Immediate response after an upload — processing runs in the background."""
+
+    document_id: UUID
+    task_id: str | None = Field(
+        default=None,
+        description="Background task id (null if the task could not be queued)",
+    )
+    status: DocumentStatus = Field(description="Initial document status")
+    filename: str
+    message: str = "Upload received. Processing has started."
+
+
+class ProgressTimelineEntry(BaseModel):
+    """A single stage transition in the ingestion timeline."""
+
+    stage: str
+    label: str
+    at: str
+
+
+class DocumentProgressResponse(BaseModel):
+    """Live, human-friendly progress of a document's ingestion pipeline."""
+
+    document_id: UUID
+    task_id: str | None = None
+    status: str = Field(
+        description="queued | processing | completed | failed | unknown"
+    )
+    stage: str | None = None
+    stage_label: str | None = None
+    progress: int = Field(default=0, ge=0, le=100)
+    remaining: int = Field(
+        default=100, ge=0, le=100, description="Approximate work remaining (%)"
+    )
+    message: str | None = None
+    error: str | None = None
+    completed: bool = False
+    updated_at: str | None = None
+    timeline: list[ProgressTimelineEntry] = Field(default_factory=list)
+
+
 class ChunkMetadata(BaseModel):
     """Structured metadata stored alongside each chunk."""
 

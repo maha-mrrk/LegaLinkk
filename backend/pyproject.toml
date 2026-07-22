@@ -27,6 +27,9 @@ pgvector = "^0.3.6"
 fastembed = "^0.6.0"
 httpx = "^0.28.0"
 langgraph = "^0.3.34"
+langfuse = "^3.0.0"
+celery = { extras = ["redis"], version = "^5.4.0" }
+redis = "^5.2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"

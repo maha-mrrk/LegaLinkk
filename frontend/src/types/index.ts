@@ -63,6 +63,42 @@ export interface DocumentItem {
   indexed?: boolean
 }
 
+export type IngestionStatus =
+  | 'queued'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'unknown'
+
+export interface IngestionTimelineEntry {
+  stage: string
+  label: string
+  at: string
+}
+
+export interface IngestionProgress {
+  document_id: string
+  task_id: string | null
+  status: IngestionStatus
+  stage: string | null
+  stage_label: string | null
+  progress: number
+  remaining: number
+  message: string | null
+  error: string | null
+  completed: boolean
+  updated_at: string | null
+  timeline: IngestionTimelineEntry[]
+}
+
+export interface UploadResult {
+  documentId: string
+  taskId: string | null
+  status: string
+  filename: string
+  message: string
+}
+
 export interface LegalSource {
   document_id: string
   filename?: string
@@ -104,11 +140,23 @@ export interface ChatAnswer {
   metadata?: Record<string, unknown>
 }
 
+export interface ChatDocumentResult {
+  /** Complete, self-contained HTML document (printable to PDF). */
+  html: string
+  sources: ChatSourceRef[]
+  metadata?: Record<string, unknown>
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: string
+  sources?: string[]
+  /** Generation time in seconds (assistant messages only). */
+  elapsed?: number
+  /** When set, this assistant message is a generated HTML document. */
+  document?: string
 }
 
 export interface CriticalPoint {

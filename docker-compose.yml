@@ -19,6 +19,21 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: legallink-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: ./backend
@@ -30,6 +45,7 @@ services:
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
       EMBEDDING_CACHE_DIR: /root/.cache/fastembed
       # Low-RAM runtime knobs (override .env if needed)
       OMP_NUM_THREADS: "1"
@@ -45,6 +61,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./backend:/app
       - embedding_cache:/root/.cache/fastembed
@@ -55,6 +73,45 @@ services:
       --port 8000
       --workers 1
 
+  # Celery worker: runs the long-running LangGraph ingestion pipeline off the
+  # request path. Shares the backend image + embedding model cache.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: legallink-worker
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      EMBEDDING_CACHE_DIR: /root/.cache/fastembed
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      FLAGS_use_mkldnn: "0"
+      OCR_RENDER_SCALE: "1.0"
+      OCR_USE_ANGLE_CLS: "false"
+      OCR_MAX_IMAGE_SIDE: "1280"
+      EMBEDDING_BATCH_SIZE: "2"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - embedding_cache:/root/.cache/fastembed
+    # Single worker/concurrency=1 keeps memory bounded on low-RAM hosts.
+    command: >
+      celery -A app.core.celery_app:celery_app worker
+      --loglevel=info
+      --concurrency=1
+      --max-tasks-per-child=20
+
 volumes:
   postgres_data:
   embedding_cache:
+  redis_data:

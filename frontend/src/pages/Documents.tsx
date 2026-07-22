@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { FileText, Upload } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, FileText, Upload } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
+import { IngestionProgress } from '@/components/IngestionProgress'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
 import { StatusBadge } from '@/components/StatusBadge'
 import { UploadZone } from '@/components/UploadZone'
@@ -8,9 +11,36 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { useDocuments, useUploadDocument } from '@/hooks/useDocuments'
 
+interface ActiveUpload {
+  documentId: string
+  filename: string
+}
+
 export function DocumentsPage() {
   const { data, isLoading } = useDocuments()
   const upload = useUploadDocument()
+  const queryClient = useQueryClient()
+  const [activeUploads, setActiveUploads] = useState<ActiveUpload[]>([])
+
+  const refreshLists = () => {
+    void queryClient.invalidateQueries({ queryKey: ['documents'] })
+    void queryClient.invalidateQueries({ queryKey: ['activity'] })
+  }
+
+  const handleFiles = (files: File[]) => {
+    const file = files[0]
+    if (!file) return
+    upload.mutate(file, {
+      onSuccess: (result) => {
+        setActiveUploads((prev) =>
+          [
+            { documentId: result.documentId, filename: result.filename },
+            ...prev.filter((u) => u.documentId !== result.documentId),
+          ].slice(0, 5),
+        )
+      },
+    })
+  }
 
   return (
     <div className="grid gap-6 lg:grid-cols-3">
@@ -19,20 +49,30 @@ export function DocumentsPage() {
           title="Importer un contrat"
           subtitle="Formats acceptés : PDF · jusqu’à 25 Mo"
         />
-        <UploadZone
-          onFiles={(files) => {
-            const file = files[0]
-            if (file) upload.mutate(file)
-          }}
-        />
+        <UploadZone onFiles={handleFiles} />
+
         {upload.isPending ? (
-          <p className="mt-3 text-xs text-brand">Envoi en cours…</p>
+          <p className="mt-3 text-xs text-brand">Envoi du document…</p>
         ) : null}
-        {upload.isSuccess ? (
-          <p className="mt-3 text-xs text-success">
-            Document ajouté : {upload.data.filename}
+
+        {upload.isError ? (
+          <p className="mt-3 flex items-center gap-1.5 text-xs text-danger">
+            <AlertTriangle className="size-3.5" />
+            {upload.error instanceof Error
+              ? upload.error.message
+              : "L'envoi a échoué. Veuillez réessayer."}
           </p>
         ) : null}
+
+        {activeUploads.map((item) => (
+          <IngestionProgress
+            key={item.documentId}
+            documentId={item.documentId}
+            filename={item.filename}
+            onCompleted={refreshLists}
+            onFailed={refreshLists}
+          />
+        ))}
       </Card>
 
       <Card className="lg:col-span-2" padding="lg">

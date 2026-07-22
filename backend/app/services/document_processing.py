@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -19,6 +20,11 @@ from app.repositories.document import DocumentRepository
 from app.services.chunker import SemanticChunker
 
 logger = get_logger(__name__)
+
+
+def _enum_value(value: object) -> object:
+    """Return ``value.value`` for enums, otherwise the value unchanged."""
+    return getattr(value, "value", value)
 
 
 class DocumentProcessingError(Exception):
@@ -47,16 +53,26 @@ class DocumentProcessingService:
             chunk_overlap=self._settings.chunk_overlap,
         )
 
-    async def process_document(self, document_id: UUID) -> Document:
+    async def process_document(
+        self,
+        document_id: UUID,
+        *,
+        on_stage: Callable[[str], Awaitable[None]] | None = None,
+    ) -> Document:
         """Run the full ingestion pipeline (LangGraph) for an existing document.
 
         The node orchestration (parse → ocr → clean → chunk → embed → persist →
         index) is driven by :func:`app.graphs.ingestion_graph.build_ingestion_graph`.
         This method only owns the surrounding transactional shell: flipping the
         document status and resetting any previous processing/index state.
+
+        ``on_stage`` is an optional progress hook (used by the Celery task to
+        publish live progress); it is pure instrumentation and does not affect
+        the pipeline.
         """
         # Imported lazily to avoid a circular import (the graph persists via us).
         from app.graphs.ingestion_graph import build_ingestion_graph
+        from app.services.langfuse_service import get_langfuse_service
 
         document = await self._documents.get_by_id(document_id)
         if document is None:
@@ -68,6 +84,17 @@ class DocumentProcessingService:
             "Processing started for document_id=%s filename=%s",
             document.id,
             document.original_filename,
+        )
+
+        # Optional parent trace grouping every ingestion node into one run.
+        langfuse = get_langfuse_service()
+        trace = langfuse.start_trace(
+            "ingestion",
+            input={
+                "document_id": str(document.id),
+                "filename": document.original_filename,
+            },
+            metadata={"workflow": "ingestion", "document_id": str(document.id)},
         )
 
         try:
@@ -82,6 +109,9 @@ class DocumentProcessingService:
                 session=self._session,
                 settings=self._settings,
                 persister=self,
+                langfuse=langfuse,
+                trace=trace,
+                on_stage=on_stage,
             )
             initial_state = {
                 "document_id": str(document.id),
@@ -106,8 +136,20 @@ class DocumentProcessingService:
                 document.id,
                 document.extraction_method,
             )
+            langfuse.end_trace(
+                trace,
+                output={
+                    "status": _enum_value(document.status),
+                    "extraction_method": _enum_value(document.extraction_method),
+                    "page_count": document.page_count,
+                    "index_status": _enum_value(document.index_status),
+                    "indexed_chunk_count": document.indexed_chunk_count,
+                    "errors": errors,
+                },
+            )
             return document
-        except Exception:
+        except Exception as exc:
+            langfuse.end_trace(trace, error=exc)
             await self._session.rollback()
             failed = await self._documents.get_by_id(document_id)
             if failed is not None:

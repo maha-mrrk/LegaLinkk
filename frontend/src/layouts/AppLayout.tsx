@@ -31,7 +31,7 @@ export function DashboardLayout() {
   const name = user?.full_name || user?.email || ''
   return (
     <AppShell
-      title={name ? `Bonjour, ${name} 👋` : 'Tableau de bord'}
+      title={name ? `Bonjour, ${name} ` : 'Tableau de bord'}
       subtitle="Voici un aperçu de votre activité juridique."
     />
   )

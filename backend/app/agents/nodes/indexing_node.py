@@ -31,8 +31,15 @@ class IndexingNode(BaseGraphAgent):
 
     async def execute(self, state: GraphState) -> GraphState:
         document_id = require_document_id(state)
-        logger.info("IndexingNode: indexing document_id=%s", document_id)
-        document = await self._indexing.index_document(document_id)
+        precomputed = self._collect_precomputed(state)
+        logger.info(
+            "IndexingNode: indexing document_id=%s (reuse_embeddings=%s)",
+            document_id,
+            bool(precomputed),
+        )
+        document = await self._indexing.index_document(
+            document_id, precomputed_embeddings=precomputed
+        )
 
         metadata = ensure_metadata(state)
         metadata["index_status"] = (
@@ -43,3 +50,24 @@ class IndexingNode(BaseGraphAgent):
         metadata["indexed_chunk_count"] = document.indexed_chunk_count
         metadata["embedding_model"] = document.embedding_model
         return state
+
+    @staticmethod
+    def _collect_precomputed(state: GraphState) -> dict[int, list[float]] | None:
+        """Map already-computed embeddings (from EmbeddingNode) to chunk indices.
+
+        The vectors reference the exact same chunk texts, so reusing them yields
+        identical results while avoiding a duplicate embedding pass. Returns None
+        unless every chunk has a matching vector and index.
+        """
+        chunks = state.get("chunks") or []
+        embeddings = state.get("embeddings") or []
+        if not embeddings or len(embeddings) != len(chunks):
+            return None
+
+        precomputed: dict[int, list[float]] = {}
+        for chunk, vector in zip(chunks, embeddings, strict=True):
+            index = chunk.get("chunk_index")
+            if index is None:
+                return None
+            precomputed[int(index)] = vector
+        return precomputed or None

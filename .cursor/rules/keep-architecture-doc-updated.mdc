@@ -1,0 +1,33 @@
+---
+description: Keep docs/ARCHITECTURE.md in sync with the codebase architecture
+alwaysApply: true
+---
+
+# Keep `docs/ARCHITECTURE.md` Up To Date
+
+`docs/ARCHITECTURE.md` is the canonical architecture reference. Whenever a change
+alters the architecture, update the relevant section(s) of that file **in the same
+change** (do not defer it).
+
+## Update the doc when you change any of:
+
+- **Database** (§4 + ER diagram): new/removed/renamed tables, columns, enums,
+  indexes, constraints, relationships, or Alembic migrations.
+- **Backend** (§3, §8): new/removed services, repositories, routers, or endpoints;
+  changed request/response schemas, dependencies, or middleware.
+- **RAG pipeline** (§5): any change to parse/OCR/clean/chunk/embed/index/retrieve/
+  rerank/generate stages or the models used.
+- **LangGraph / agents** (§6, §7): new/removed nodes, graphs, agents, tools, or
+  wiring; a placeholder becoming real (update ⚠/✗ flags).
+- **Frontend** (§9): new/removed routes, pages, hooks, or service functions; mock
+  data becoming real.
+- **Infrastructure** (§1): new Docker Compose services or data-flow changes.
+- **Limitations / Roadmap** (§13, §14): keep ✓ / ⚠ / ✗ status accurate.
+
+## How to update
+
+- Edit only the affected section(s); keep Mermaid diagrams consistent with the text.
+- Preserve the ✓ (done) / ⚠ (partial) / ✗ (not implemented / unused) conventions.
+- Update the `_Last verified:_` date near the top of the file.
+- If you are unsure whether something is wired in vs. defined-but-unused, verify in
+  the code before writing.

@@ -9,6 +9,13 @@ class ChatQueryRequest(BaseModel):
     """Full RAG pipeline request: retrieve → rerank → generate."""
 
     question: str = Field(..., min_length=1, description="User question")
+    document_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Scope retrieval to a single document. When omitted, answers are "
+            "grounded on the entire document library."
+        ),
+    )
     top_k: int | None = Field(
         default=None,
         ge=1,
@@ -62,5 +69,13 @@ class ChatQueryResponse(BaseModel):
     """Grounded answer with sources."""
 
     answer: str
+    sources: list[ChatSource]
+    metadata: ChatMetadata
+
+
+class ChatDocumentResponse(BaseModel):
+    """Grounded, self-contained HTML document (printable to PDF) with sources."""
+
+    html: str
     sources: list[ChatSource]
     metadata: ChatMetadata

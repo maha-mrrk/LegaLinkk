@@ -44,11 +44,23 @@ class IndexingService:
         self._embeddings_repo = EmbeddingRepository(session)
         self._embeddings = embedding_service or get_embedding_service()
 
-    async def index_document(self, document_id: UUID) -> Document:
+    async def index_document(
+        self,
+        document_id: UUID,
+        *,
+        precomputed_embeddings: dict[int, list[float]] | None = None,
+    ) -> Document:
         """Generate embeddings for all chunks and store them in PostgreSQL/pgvector.
 
         If embeddings already exist, they are removed and regenerated (no duplicates).
         Concurrent indexing of the same document is rejected.
+
+        ``precomputed_embeddings`` (chunk_index → vector) is an optional
+        optimization: when the ingestion pipeline already embedded these exact
+        chunks (via ``EmbeddingNode``), the vectors are reused verbatim instead
+        of being recomputed. This yields identical results while skipping a full
+        embedding pass. It falls back to embedding whenever the precomputed set
+        does not cover every chunk.
         """
         document = await self._documents.get_by_id(document_id)
         if document is None:
@@ -82,8 +94,7 @@ class IndexingService:
         )
 
         try:
-            texts = [chunk.text for chunk in chunks]
-            vectors = await asyncio.to_thread(self._embeddings.embed_batch, texts)
+            vectors = await self._resolve_vectors(chunks, precomputed_embeddings)
             if len(vectors) != len(chunks):
                 raise IndexingError(
                     f"Embedding count mismatch: got {len(vectors)} for {len(chunks)} chunks"
@@ -146,6 +157,31 @@ class IndexingService:
             raise IndexingError(
                 f"Indexing failed for document {document_id}"
             ) from exc
+
+    async def _resolve_vectors(
+        self,
+        chunks: list,
+        precomputed: dict[int, list[float]] | None,
+    ) -> list[list[float]]:
+        """Reuse precomputed vectors when complete; otherwise embed the chunks."""
+        if precomputed:
+            try:
+                reused = [precomputed[chunk.chunk_index] for chunk in chunks]
+            except KeyError:
+                reused = None
+            if reused is not None and len(reused) == len(chunks):
+                logger.info(
+                    "Reusing %s precomputed embeddings (skipping re-embed)",
+                    len(reused),
+                )
+                return reused
+            logger.info(
+                "Precomputed embeddings incomplete — embedding %s chunks from scratch",
+                len(chunks),
+            )
+
+        texts = [chunk.text for chunk in chunks]
+        return await asyncio.to_thread(self._embeddings.embed_batch, texts)
 
     async def reindex_all(self) -> dict:
         """Re-index every processed document (delete old embeddings, regenerate)."""

@@ -9,7 +9,9 @@ export const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 300_000,
+  // Legal analysis / chat generation can take a few minutes on the LLM.
+  // Kept in sync with the Vite proxy (600s) and backend LLM read timeout.
+  timeout: 600_000,
 })
 
 const TOKEN_KEY = 'legallink_token'

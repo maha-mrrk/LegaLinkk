@@ -38,11 +38,11 @@ collaborators (``ExtractionPipeline.is_scanned_pdf`` and the
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
 from langgraph.graph import END, StateGraph
-from langgraph.types import RetryPolicy
 
 from app.agents.base_agent import BaseGraphAgent
 from app.agents.nodes import (
@@ -55,15 +55,23 @@ from app.agents.nodes import (
 )
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.graphs.retry import transient_retry_policy
 from app.parsers import PdfParseError
 from app.parsers.extraction_pipeline import ExtractionPipeline
 from app.services.indexing import IndexingError, IndexingService
+from app.services.langfuse_service import LangfuseService, get_langfuse_service
 from app.state.graph_state import GraphState
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
+
+_WORKFLOW = "ingestion"
+
+# Optional hook fired when a stage starts, used to publish live progress.
+# It is pure instrumentation — the workflow (nodes/edges) is unchanged.
+StageCallback = Callable[[str], Awaitable[None]]
 
 
 class ChunkPersister(Protocol):
@@ -80,10 +88,36 @@ class ChunkPersister(Protocol):
     ) -> object: ...
 
 
-async def _run_node(node: BaseGraphAgent, state: GraphState) -> GraphState:
-    """Execute a node with uniform start/end logging."""
+async def _emit(on_stage: StageCallback | None, stage: str) -> None:
+    """Fire the progress hook, swallowing errors so it never breaks ingestion."""
+    if on_stage is None:
+        return
+    try:
+        await on_stage(stage)
+    except Exception:  # pragma: no cover - progress is best-effort
+        logger.debug("[ingestion] progress hook failed for stage=%s", stage, exc_info=True)
+
+
+async def _run_node(
+    node: BaseGraphAgent,
+    state: GraphState,
+    *,
+    langfuse: LangfuseService,
+    parent: Any | None = None,
+    on_stage: StageCallback | None = None,
+) -> GraphState:
+    """Execute a node with uniform start/end logging + optional Langfuse trace.
+
+    All observability goes through ``LangfuseService`` (a no-op when disabled),
+    so the node itself runs unchanged. When ``parent`` is set, the node span is
+    nested under the workflow trace. ``on_stage`` (also optional) publishes live
+    progress the moment the stage starts.
+    """
     logger.info("[ingestion] node=%s start", node.name)
-    result = await node.execute(state)
+    await _emit(on_stage, node.name)
+    result = await langfuse.trace_node(
+        node, state, workflow=_WORKFLOW, parent=parent
+    )
     logger.info("[ingestion] node=%s done", node.name)
     return result
 
@@ -93,14 +127,21 @@ def build_ingestion_graph(
     session: "AsyncSession",
     settings: Settings | None = None,
     persister: ChunkPersister,
+    langfuse: LangfuseService | None = None,
+    trace: Any | None = None,
+    on_stage: StageCallback | None = None,
 ):
     """Compile the LangGraph ingestion pipeline.
 
     Dependencies are injected: nodes are built from the given session/settings
     and chunk persistence is delegated to ``persister`` (the existing
-    ``DocumentProcessingService``).
+    ``DocumentProcessingService``). Tracing is delegated to ``langfuse`` (the
+    shared, optional ``LangfuseService``); ``trace`` is an optional parent span
+    handle so every node groups under one workflow trace. ``on_stage`` is an
+    optional progress hook fired as each stage starts (for live UI feedback).
     """
     settings = settings or get_settings()
+    langfuse = langfuse or get_langfuse_service()
 
     parser_node = ParserNode()
     ocr_node = OCRNode(settings=settings)
@@ -112,11 +153,13 @@ def build_ingestion_graph(
     # Reused only for the digital-vs-scanned routing decision.
     router = ExtractionPipeline(settings=settings)
 
-    retry = RetryPolicy(max_attempts=3)
+    retry = transient_retry_policy(3)
 
     async def parser_step(state: GraphState) -> GraphState:
         try:
-            return await _run_node(parser_node, state)
+            return await _run_node(
+                parser_node, state, langfuse=langfuse, parent=trace, on_stage=on_stage
+            )
         except PdfParseError as exc:
             # Digital parse failed → let the router send this to OCR.
             logger.warning("[ingestion] digital parse failed (%s) → OCR fallback", exc)
@@ -140,19 +183,28 @@ def build_ingestion_graph(
         return "cleaning"
 
     async def ocr_step(state: GraphState) -> GraphState:
-        return await _run_node(ocr_node, state)
+        return await _run_node(
+            ocr_node, state, langfuse=langfuse, parent=trace, on_stage=on_stage
+        )
 
     async def cleaning_step(state: GraphState) -> GraphState:
-        return await _run_node(cleaning_node, state)
+        return await _run_node(
+            cleaning_node, state, langfuse=langfuse, parent=trace, on_stage=on_stage
+        )
 
     async def chunking_step(state: GraphState) -> GraphState:
-        return await _run_node(chunking_node, state)
+        return await _run_node(
+            chunking_node, state, langfuse=langfuse, parent=trace, on_stage=on_stage
+        )
 
     async def embedding_step(state: GraphState) -> GraphState:
-        return await _run_node(embedding_node, state)
+        return await _run_node(
+            embedding_node, state, langfuse=langfuse, parent=trace, on_stage=on_stage
+        )
 
     async def persist_step(state: GraphState) -> GraphState:
         logger.info("[ingestion] node=persist start")
+        await _emit(on_stage, "persist")
         metadata = state.get("metadata") or {}
         await persister.finalize_chunks(
             UUID(str(state["document_id"])),
@@ -169,7 +221,9 @@ def build_ingestion_graph(
 
     async def indexing_step(state: GraphState) -> GraphState:
         try:
-            return await _run_node(indexing_node, state)
+            return await _run_node(
+                indexing_node, state, langfuse=langfuse, parent=trace, on_stage=on_stage
+            )
         except IndexingError as exc:
             # Chunking succeeded; keep the document processed even if index fails.
             logger.exception("[ingestion] indexing failed — document stays processed")

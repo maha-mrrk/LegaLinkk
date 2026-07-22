@@ -1,4 +1,10 @@
-import type { ActivityItem, DocumentItem, DocumentStatus } from '@/types'
+import type {
+  ActivityItem,
+  DocumentItem,
+  DocumentStatus,
+  IngestionProgress,
+  UploadResult,
+} from '@/types'
 import { api } from './api'
 
 /** Raw document shape returned by the backend API. */
@@ -76,13 +82,42 @@ export async function fetchDocuments(): Promise<DocumentItem[]> {
   return data.items.map(toDocumentItem)
 }
 
-export async function uploadDocument(file: File): Promise<DocumentItem> {
+interface BackendUploadResponse {
+  document_id: string
+  task_id: string | null
+  status: string
+  filename: string
+  message: string
+}
+
+/**
+ * Upload a contract. The backend queues processing in the background and
+ * returns immediately with a task id — poll {@link fetchDocumentProgress} for
+ * live status.
+ */
+export async function uploadDocument(file: File): Promise<UploadResult> {
   const form = new FormData()
   form.append('file', file)
-  const { data } = await api.post<BackendDocument>('/documents', form, {
+  const { data } = await api.post<BackendUploadResponse>('/documents', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
-  return toDocumentItem(data)
+  return {
+    documentId: data.document_id,
+    taskId: data.task_id,
+    status: data.status,
+    filename: data.filename,
+    message: data.message,
+  }
+}
+
+/** Fetch the live processing progress for a document. */
+export async function fetchDocumentProgress(
+  documentId: string,
+): Promise<IngestionProgress> {
+  const { data } = await api.get<IngestionProgress>(
+    `/documents/${documentId}/progress`,
+  )
+  return data
 }
 
 /** No dedicated /activity endpoint — derive it from the most recent documents. */

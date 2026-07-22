@@ -1,5 +1,6 @@
 """Business logic for document upload, retrieval, and deletion."""
 
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -11,13 +12,21 @@ from app.core.exceptions import NotFoundError, PayloadTooLargeError, ValidationE
 from app.core.logging import get_logger
 from app.models.document import Document, DocumentStatus
 from app.repositories.document import DocumentRepository
-from app.services.document_processing import (
-    DocumentProcessingError,
-    DocumentProcessingService,
-)
+from app.services.document_processing import DocumentProcessingService
+from app.services.progress import get_ingestion_progress_service
 from app.utils.storage import DocumentStorage, is_pdf_content
 
 logger = get_logger(__name__)
+
+
+class UploadResult:
+    """Outcome of an upload: the persisted document + its background task id."""
+
+    __slots__ = ("document", "task_id")
+
+    def __init__(self, document: Document, task_id: str | None) -> None:
+        self.document = document
+        self.task_id = task_id
 
 
 class DocumentService:
@@ -37,9 +46,16 @@ class DocumentService:
         self._processing = processing_service or DocumentProcessingService(
             session, settings=self._settings
         )
+        self._progress = get_ingestion_progress_service()
 
-    async def upload(self, file: UploadFile) -> Document:
-        """Validate, store, persist as uploaded, then run the preprocessing pipeline."""
+    async def upload(self, file: UploadFile) -> UploadResult:
+        """Validate, store, persist as uploaded, then queue background processing.
+
+        The heavy pipeline (extract → OCR → clean → chunk → embed → index) runs
+        asynchronously via Celery so this call returns immediately with the
+        document id, task id, and initial status. Live progress is exposed via
+        ``GET /documents/{id}/progress``.
+        """
         original_filename = self._require_filename(file.filename)
         content = await file.read()
         self._validate_upload(original_filename, file.content_type, content)
@@ -75,19 +91,108 @@ class DocumentService:
             document.status.value,
         )
 
-        try:
-            document = await self._processing.process_document(document.id)
-        except (DocumentProcessingError, Exception):
-            # Processing service already marks FAILED and commits.
-            logger.exception(
-                "Automatic preprocessing failed for document_id=%s", document.id
-            )
-            failed = await self._repo.get_by_id(document.id)
-            if failed is not None:
-                return failed
-            raise
+        task_id = await self._enqueue_processing(document.id)
+        return UploadResult(document=document, task_id=task_id)
 
-        return document
+    async def _enqueue_processing(self, document_id: UUID) -> str | None:
+        """Queue the ingestion task and seed the progress store (best-effort)."""
+        # Imported lazily to keep Celery/Redis optional at import time.
+        from app.tasks.ingestion import process_document_task
+
+        doc_id = str(document_id)
+        try:
+            async_result = await asyncio.to_thread(
+                process_document_task.delay, doc_id
+            )
+            task_id = async_result.id
+            await self._progress.mark_queued(doc_id, task_id)
+            logger.info("Ingestion queued document_id=%s task_id=%s", doc_id, task_id)
+            return task_id
+        except Exception:
+            logger.exception("Failed to enqueue ingestion for document_id=%s", doc_id)
+            await self._progress.mark_failed(
+                doc_id, "Could not queue processing. Please retry."
+            )
+            return None
+
+    async def reprocess(self, document_id: UUID) -> UploadResult:
+        """Re-queue background processing for an existing document."""
+        document = await self.get_document(document_id)
+        task_id = await self._enqueue_processing(document.id)
+        return UploadResult(document=document, task_id=task_id)
+
+    async def get_progress(self, document_id: UUID) -> dict:
+        """Return live ingestion progress, falling back to DB-derived status."""
+        live = await self._progress.get(str(document_id))
+        if live:
+            progress = int(live.get("progress") or 0)
+            status = str(live.get("status") or "unknown")
+            return {
+                "document_id": document_id,
+                "task_id": live.get("task_id"),
+                "status": status,
+                "stage": live.get("stage"),
+                "stage_label": live.get("stage_label"),
+                "progress": progress,
+                "remaining": max(0, 100 - progress),
+                "message": live.get("message"),
+                "error": live.get("error"),
+                "completed": status == "completed",
+                "updated_at": live.get("updated_at"),
+                "timeline": live.get("timeline") or [],
+            }
+
+        document = await self.get_document(document_id)
+        return self._progress_from_document(document)
+
+    @staticmethod
+    def _progress_from_document(document: Document) -> dict:
+        """Best-effort progress when no live Redis entry exists (e.g. expired)."""
+        status = document.status
+        mapping = {
+            DocumentStatus.UPLOADED: ("queued", 5, "Queued", "Queued for processing…"),
+            DocumentStatus.PROCESSING: (
+                "processing",
+                50,
+                "Processing",
+                "Processing your document…",
+            ),
+            DocumentStatus.PROCESSED: (
+                "completed",
+                100,
+                "Completed",
+                "Document ready for AI analysis.",
+            ),
+            DocumentStatus.COMPLETED: (
+                "completed",
+                100,
+                "Completed",
+                "Document ready for AI analysis.",
+            ),
+            DocumentStatus.FAILED: (
+                "failed",
+                100,
+                "Failed",
+                "Processing failed. Please try again.",
+            ),
+        }
+        state, progress, label, message = mapping.get(
+            status, ("unknown", 0, None, None)
+        )
+        return {
+            "document_id": document.id,
+            "task_id": None,
+            "status": state,
+            "stage": state,
+            "stage_label": label,
+            "progress": progress,
+            "remaining": max(0, 100 - progress),
+            "message": message,
+            "error": None,
+            "completed": state == "completed",
+            "updated_at": None,
+            "timeline": [],
+        }
 
     async def list_documents(
         self, *, skip: int = 0, limit: int = 100
