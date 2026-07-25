@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
+    # Completion budget for the document-generation mode (full HTML reports:
+    # per-article analysis + recommendations + risk-score note). Much larger than
+    # a chat reply so long reports are not truncated mid-section.
+    document_max_tokens: int = 16000
+    # Extra completion rounds allowed to finish a report that hit the token limit
+    # (continuation). 0 disables continuation (only detect + flag truncation).
+    document_max_continuations: int = 3
     llm_timeout_seconds: float = 300.0
 
     # Provider-specific API keys (optional). When set, they take precedence over

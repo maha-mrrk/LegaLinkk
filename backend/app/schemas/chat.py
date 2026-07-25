@@ -79,3 +79,14 @@ class ChatDocumentResponse(BaseModel):
     html: str
     sources: list[ChatSource]
     metadata: ChatMetadata
+
+
+class ChatDocumentPdfRequest(BaseModel):
+    """Convert an already-generated HTML document to a downloadable PDF."""
+
+    html: str = Field(..., min_length=1, description="Self-contained HTML document")
+    filename: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Suggested download filename (without path).",
+    )

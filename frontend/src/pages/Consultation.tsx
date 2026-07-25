@@ -17,7 +17,12 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { suggestions } from '@/data/mock'
 import { useDocuments, useUploadDocument } from '@/hooks/useDocuments'
-import { generateDocument, streamQuestion, wantsDocument } from '@/services/chat'
+import {
+  downloadDocumentPdf,
+  generateDocument,
+  streamQuestion,
+  wantsDocument,
+} from '@/services/chat'
 import { cn } from '@/lib/cn'
 import type { ChatMessage } from '@/types'
 
@@ -47,6 +52,29 @@ function downloadDocument(html: string): void {
 }
 
 function DocumentCard({ html }: { html: string }) {
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfError, setPdfError] = useState<string | null>(null)
+
+  const handleDownloadPdf = async () => {
+    setPdfError(null)
+    setPdfLoading(true)
+    try {
+      const blob = await downloadDocumentPdf(html)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `document-legallink-${Date.now()}.pdf`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setPdfError('Le téléchargement du PDF a échoué. Veuillez réessayer.')
+    } finally {
+      setPdfLoading(false)
+    }
+  }
+
   return (
     <div className="mt-3 overflow-hidden rounded-xl border border-border bg-slate-50">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-white px-3 py-2">
@@ -57,20 +85,38 @@ function DocumentCard({ html }: { html: string }) {
         <div className="flex gap-1.5">
           <button
             type="button"
-            onClick={() => printDocument(html)}
-            className="inline-flex items-center gap-1 rounded-lg bg-brand px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-brand-dark"
+            onClick={handleDownloadPdf}
+            disabled={pdfLoading}
+            className="inline-flex items-center gap-1 rounded-lg bg-brand px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-brand-dark disabled:opacity-60"
           >
-            <Printer className="size-3" /> Imprimer / PDF
+            {pdfLoading ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Download className="size-3" />
+            )}
+            {pdfLoading ? 'Génération…' : 'Télécharger PDF'}
+          </button>
+          <button
+            type="button"
+            onClick={() => printDocument(html)}
+            className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition hover:border-brand/40 hover:text-brand"
+          >
+            <Printer className="size-3" /> Imprimer
           </button>
           <button
             type="button"
             onClick={() => downloadDocument(html)}
             className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition hover:border-brand/40 hover:text-brand"
           >
-            <Download className="size-3" /> Télécharger
+            <FileText className="size-3" /> HTML
           </button>
         </div>
       </div>
+      {pdfError ? (
+        <p className="border-b border-border bg-danger/5 px-3 py-1.5 text-[11px] text-danger">
+          {pdfError}
+        </p>
+      ) : null}
       <iframe
         // Sandbox with no allowances: renders styled HTML but blocks scripts.
         sandbox=""

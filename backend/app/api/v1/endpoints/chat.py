@@ -1,10 +1,12 @@
 """Grounded RAG chat + conversation management endpoints."""
 
+import asyncio
 import json
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
@@ -12,10 +14,12 @@ from app.core.logging import get_logger
 from app.db.session import get_db
 from app.graphs.rag_graph import build_rag_graph
 from app.schemas.chat import (
+    ChatDocumentPdfRequest,
     ChatDocumentResponse,
     ChatQueryRequest,
     ChatQueryResponse,
 )
+from app.services.pdf import render_html_to_pdf
 from app.schemas.conversation import (
     ConversationCreateRequest,
     ConversationListResponse,
@@ -226,6 +230,35 @@ async def chat_document(
         document_id=body.document_id,
     )
     return ChatDocumentResponse.model_validate(result)
+
+
+def _safe_pdf_filename(name: str | None) -> str:
+    """Return a safe ``*.pdf`` filename (no path traversal / header injection)."""
+    base = (name or "").strip() or "document-legallink"
+    base = base.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if base.lower().endswith(".pdf"):
+        base = base[:-4]
+    base = re.sub(r"[^A-Za-z0-9._ -]+", "_", base).strip(" .") or "document-legallink"
+    return f"{base[:120]}.pdf"
+
+
+@router.post(
+    "/document/pdf",
+    summary="Convert a generated HTML document to a downloadable PDF",
+    description=(
+        "Renders a self-contained HTML document (as produced by /chat/document) "
+        "to a print-quality PDF using WeasyPrint. External resource loading is "
+        "disabled during rendering. Returns application/pdf as an attachment."
+    ),
+)
+async def chat_document_pdf(body: ChatDocumentPdfRequest) -> Response:
+    pdf_bytes = await asyncio.to_thread(render_html_to_pdf, body.html)
+    filename = _safe_pdf_filename(body.filename)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(

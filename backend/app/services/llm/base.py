@@ -35,6 +35,9 @@ class LLMGenerationResult:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    # Why generation stopped: "stop" (normal), "length" (hit max_tokens / truncated),
+    # "content_filter", etc. Used to detect and recover from truncated documents.
+    finish_reason: str | None = None
 
 
 class LLMProviderError(AppError):
@@ -288,7 +291,8 @@ class BaseLLMProvider:
 
     def _parse_completion(self, data: dict) -> LLMGenerationResult:
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMProviderError(
                 "Le service d'analyse IA a renvoyé une réponse inattendue. "
@@ -299,12 +303,14 @@ class BaseLLMProvider:
             ) from exc
 
         usage = data.get("usage") or {}
+        finish_reason = choice.get("finish_reason") or choice.get("stop_reason")
         return LLMGenerationResult(
             content=(content or "").strip(),
             model=str(data.get("model") or self._model),
             prompt_tokens=_as_optional_int(usage.get("prompt_tokens")),
             completion_tokens=_as_optional_int(usage.get("completion_tokens")),
             total_tokens=_as_optional_int(usage.get("total_tokens")),
+            finish_reason=str(finish_reason) if finish_reason else None,
         )
 
     async def stream_complete(

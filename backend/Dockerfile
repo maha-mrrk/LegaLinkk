@@ -28,6 +28,15 @@ RUN apt-get update \
         libsm6 \
         libxext6 \
         libxrender1 \
+        # WeasyPrint runtime libraries (HTML → PDF rendering)
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libcairo2 \
+        libgdk-pixbuf-2.0-0 \
+        libffi8 \
+        libfontconfig1 \
+        shared-mime-info \
+        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 

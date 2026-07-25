@@ -40,18 +40,37 @@ export async function generateDocument(
 }
 
 /**
+ * Render an already-generated HTML document to a real PDF (server-side
+ * WeasyPrint) and return the binary blob for download.
+ */
+export async function downloadDocumentPdf(
+  html: string,
+  filename?: string,
+): Promise<Blob> {
+  const { data } = await api.post(
+    '/chat/document/pdf',
+    { html, filename },
+    { responseType: 'blob' },
+  )
+  return data as Blob
+}
+
+/**
  * Heuristic: does the user's message ask for a generated document / web page /
  * PDF rather than a normal chat answer? Kept intentionally focused to avoid
  * misfiring on ordinary questions that merely mention "document".
  */
 export function wantsDocument(text: string): boolean {
   const t = text.toLowerCase()
-  // A generation verb close to a document noun, or an explicit format keyword.
+  // A generation/analysis verb close to a document noun, or an explicit format
+  // keyword. The verb list also covers analytical requests ("analyse",
+  // "attribue un score", "synthétise", "dresse", "évalue", "donne un rapport"),
+  // which are the natural way users ask for a full written report.
   const verb =
-    /(génér|gener|génèr|genere|rédig|redig|cré[eé]|cree|prépar|prepar|établ|etabl|produi|fais|fabriqu|rédige)/
+    /(génér|gener|génèr|genere|rédig|redig|cré[eé]|cree|prépar|prepar|établ|etabl|produi|fais|fabriqu|rédige|dress|analys|synth[eé]tis|synth[eè]tis|attribu|évalu|evalu|résum|resum|donne|liste)/
   const noun =
-    /(pdf|page web|page html|site web|document|rapport|brochure|note de synth[eè]se|synth[eè]se|lettre|courrier|mémo|memo|compte[- ]rendu|fiche)/
-  const explicit = /(en pdf|au format pdf|en page web|en html|format html|télécharger|telecharger|imprimable)/
+    /(pdf|page web|page html|site web|document|rapport|brochure|note de synth[eè]se|synth[eè]se|lettre|courrier|mémo|memo|compte[- ]rendu|fiche|note)/
+  const explicit = /(en pdf|au format pdf|format pdf|en page web|en html|format html|télécharger|telecharger|imprimable)/
   return explicit.test(t) || (verb.test(t) && noun.test(t))
 }
 
