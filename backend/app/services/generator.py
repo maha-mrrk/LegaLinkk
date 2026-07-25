@@ -28,48 +28,6 @@ from app.services.retrieval import RetrievalService
 logger = get_logger(__name__)
 
 
-# #region agent log
-import json as _dbg_json
-import re as _dbg_re
-import urllib.request as _dbg_url
-
-_DBG_ENDPOINT = (
-    "http://host.docker.internal:7550/ingest/56cd14f2-bf56-4696-a812-75a5590c8185"
-)
-
-
-def _dbg_articles(text: str) -> dict:
-    """Detect ``Article N`` numbers in text and report gaps in the sequence."""
-    nums = [int(m) for m in _dbg_re.findall(r"[Aa]rticle\s+(\d{1,3})", text or "")]
-    uniq = sorted(set(nums))
-    gaps = (
-        [n for n in range(uniq[0], uniq[-1] + 1) if n not in uniq] if uniq else []
-    )
-    return {"article_count": len(uniq), "articles": uniq, "missing_in_sequence": gaps}
-
-
-def _dbg_post(hyp: str, location: str, message: str, data: dict, run_id: str = "run1") -> None:
-    try:
-        payload = {
-            "sessionId": "07d6c0",
-            "runId": run_id,
-            "hypothesisId": hyp,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        req = _dbg_url.Request(
-            _DBG_ENDPOINT,
-            data=_dbg_json.dumps(payload, default=str).encode(),
-            headers={"Content-Type": "application/json", "X-Debug-Session-Id": "07d6c0"},
-        )
-        _dbg_url.urlopen(req, timeout=3)
-    except Exception:
-        pass
-# #endregion
-
-
 class GenerationError(AppError):
     """Raised when grounded answer generation fails."""
 
@@ -95,7 +53,6 @@ class GeneratorService:
         prompt_builder: PromptBuilder | None = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._session = session  # agent log: used for extracted_text coverage check
         self._retrieval = retrieval_service or RetrievalService(
             session, settings=self._settings
         )
@@ -198,21 +155,6 @@ class GeneratorService:
             log_search_as="Retrieving chunks...",
         )
         logger.info("Retrieved %s candidate chunks.", len(hits))
-        # #region agent log
-        _dbg_post(
-            "H1",
-            "generator.py:_retrieve_and_rerank",
-            "candidates retrieved (before rerank)",
-            {
-                "all_docs": all_docs,
-                "document_id": str(document_id),
-                "candidate_hits": len(hits),
-                "candidate_k": candidate_k,
-                "keep_k": keep_k,
-                **_dbg_articles(" ".join(getattr(h, "text", "") or "" for h in hits)),
-            },
-        )
-        # #endregion
 
         logger.info("Reranking...")
         if not hits:
@@ -245,18 +187,6 @@ class GeneratorService:
                 final_k=keep_k,
             )
         logger.info("Reranked to %s chunks.", len(ranked))
-        # #region agent log
-        _dbg_post(
-            "H4",
-            "generator.py:_retrieve_and_rerank",
-            "final ranked chunks (after rerank/diversify)",
-            {
-                "ranked_chunks": len(ranked),
-                "keep_k": keep_k,
-                **_dbg_articles(" ".join(getattr(h, "text", "") or "" for h in ranked)),
-            },
-        )
-        # #endregion
         return ranked, candidate_k, keep_k
 
     def _prepare_prompt(
@@ -281,22 +211,6 @@ class GeneratorService:
             context_chunks,
             max_chars=self._settings.rag_max_context_chars,
         )
-        # #region agent log
-        _dbg_post(
-            "H2",
-            "generator.py:_prepare_prompt",
-            "context text sent to model (after merge/truncation)",
-            {
-                "context_chars": len(context_text),
-                "approx_tokens": len(context_text) // 4,
-                "in_chunks": len(context_chunks),
-                "used_chunks": len(used_chunks),
-                "max_chars": self._settings.rag_max_context_chars,
-                "truncated": len(used_chunks) < len(context_chunks),
-                **_dbg_articles(context_text),
-            },
-        )
-        # #endregion
         prompt = self._prompt_builder.build(
             question=question,
             context=context_text,
@@ -519,28 +433,6 @@ class GeneratorService:
             raise ValidationError("Question must not be empty")
 
         logger.info("Document generation requested chars=%s", len(cleaned))
-        # #region agent log
-        # Upstream baseline: articles present in the FULL extracted text stored at
-        # ingestion time (i.e. the parser/OCR output, before chunking/retrieval).
-        if document_id is not None:
-            try:
-                from app.repositories.document import DocumentRepository
-
-                _doc = await DocumentRepository(self._session).get_by_id(document_id)
-                _txt = getattr(_doc, "extracted_text", "") or ""
-                _dbg_post(
-                    "H3",
-                    "generator.py:generate_document",
-                    "stored extracted_text coverage (extraction output, pre-chunking)",
-                    {
-                        "document_id": str(document_id),
-                        "extracted_chars": len(_txt),
-                        **_dbg_articles(_txt),
-                    },
-                )
-            except Exception:
-                pass
-        # #endregion
         started = time.perf_counter()
         ranked, candidate_k, keep_k = await self._retrieve_and_rerank(
             cleaned, top_k=top_k, final_k=final_k, document_id=document_id
@@ -638,24 +530,6 @@ class GeneratorService:
             truncated,
             elapsed,
         )
-        # #region agent log
-        _dbg_post(
-            "H1",
-            "generator.py:generate_document",
-            "final report HTML coverage (articles mentioned in report)",
-            {"html_chars": len(html), **_dbg_articles(html)},
-        )
-        # Capture the full report HTML to analyse the risk-table structure and the
-        # displayed global score (section 1 vs "Note technique"), so the code-side
-        # recompute/correction can be designed against the real markup.
-        _dbg_post(
-            "SCORE",
-            "generator.py:generate_document",
-            "full report HTML (score-consistency analysis)",
-            {"html_len": len(html), "html": html[:45000]},
-        )
-        # #endregion
-
         return {
             "html": html,
             "sources": sources,
