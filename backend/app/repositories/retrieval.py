@@ -66,18 +66,47 @@ class RetrievalRepository:
         for row in result.all():
             entity: DocumentEmbedding = row[0]
             score = float(row[1])
-            pages = entity.page_numbers or []
-            hits.append(
-                RetrievalHit(
-                    chunk_id=entity.chunk_id,
-                    document_id=entity.document_id,
-                    filename=entity.filename,
-                    text=entity.chunk_text,
-                    similarity=score,
-                    page_numbers=[int(p) for p in pages],
-                    extraction_method=entity.extraction_method,
-                    chunk_index=entity.chunk_index,
-                    embedding_model=entity.embedding_model,
-                )
-            )
+            hits.append(self._to_hit(entity, similarity=score))
         return hits
+
+    async def list_all_by_document(
+        self, document_id: UUID
+    ) -> list[RetrievalHit]:
+        """Return **every** chunk of a document, ordered by ``chunk_index``.
+
+        Unlike :meth:`search_similar`, this performs **no** query embedding and
+        **no** cosine ranking: it returns the whole document in reading order so a
+        caller can analyse the entire contract without any Top-K slicing. Used by
+        the "full-document analysis" mode (see ``GeneratorService``), never by the
+        Q&A retrieval path, which must stay similarity-based on the user question.
+
+        Reuses the denormalized ``chunk_embeddings`` row (text, filename, pages)
+        so the result is a plain ``list[RetrievalHit]`` that flows through the
+        existing prompt/source-building pipeline unchanged. ``similarity`` is set
+        to 1.0 because every chunk is included by design, not by relevance score.
+        """
+        stmt: Select = (
+            select(DocumentEmbedding)
+            .where(DocumentEmbedding.document_id == document_id)
+            .order_by(DocumentEmbedding.chunk_index.asc())
+        )
+        result = await self._session.execute(stmt)
+        return [
+            self._to_hit(entity, similarity=1.0)
+            for entity in result.scalars().all()
+        ]
+
+    @staticmethod
+    def _to_hit(entity: DocumentEmbedding, *, similarity: float) -> RetrievalHit:
+        pages = entity.page_numbers or []
+        return RetrievalHit(
+            chunk_id=entity.chunk_id,
+            document_id=entity.document_id,
+            filename=entity.filename,
+            text=entity.chunk_text,
+            similarity=similarity,
+            page_numbers=[int(p) for p in pages],
+            extraction_method=entity.extraction_method,
+            chunk_index=entity.chunk_index,
+            embedding_model=entity.embedding_model,
+        )

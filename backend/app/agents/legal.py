@@ -94,26 +94,56 @@ class LegalAgent(BaseAgent):
         history: Sequence[dict[str, str]] | None = None,
         document_id: UUID | None = None,
     ) -> dict[str, Any]:
-        """Run the full legal analysis and return the structured payload."""
+        """Run the full legal analysis and return the structured payload.
+
+        Primary path: an LLM-produced structured analysis (summary + critical
+        points + missing info + recommendations + risk level) grounded in the
+        WHOLE contract (via ``GeneratorService.analyze_contract``). This is what
+        populates the Analysis page tabs. If the model output cannot be parsed
+        into JSON, we fall back to the deterministic rule-based classifier so the
+        endpoint always returns a coherent payload.
+        """
         logger.info("Legal analysis started.")
 
-        logger.info("Calling GeneratorService.")
-        rag = await self._generator.answer_question(
+        logger.info("Calling GeneratorService.analyze_contract.")
+        rag = await self._generator.analyze_contract(
             question,
             top_k=top_k,
             final_k=final_k,
             temperature=temperature,
-            max_tokens=max_tokens,
             history=history,
             document_id=document_id,
-            system_prompt=LEGAL_SYSTEM_PROMPT,
         )
 
-        answer: str = rag.get("answer") or ""
+        answer: str = rag.get("analysis") or ""
         sources: list[dict[str, Any]] = list(rag.get("sources") or [])
         context_text: str = rag.get("context_text") or ""
         rag_metadata: dict[str, Any] = dict(rag.get("metadata") or {})
+        structured: dict[str, Any] | None = rag.get("structured")
 
+        if structured:
+            logger.info(
+                "LLM structured analysis used. level=%s findings=%s",
+                structured["risk_level"],
+                len(structured["risk_findings"]),
+            )
+            payload: dict[str, Any] = {
+                "analysis": answer,
+                "risk_level": structured["risk_level"],
+                "missing_information": structured["missing_information"],
+                "sources": sources,
+                "recommendations": structured["recommendations"],
+                "metadata": {
+                    **rag_metadata,
+                    "agent": self.name,
+                    "risk_findings": structured["risk_findings"],
+                },
+            }
+            logger.info("Legal analysis completed.")
+            return payload
+
+        # Fallback: deterministic rule-based classifier over the retrieved text.
+        logger.info("Structured JSON unavailable — using rule-based classifier.")
         assessment: RiskAssessment = self._risk.classify(
             context_text=context_text,
             answer=answer,
@@ -121,7 +151,7 @@ class LegalAgent(BaseAgent):
         )
         logger.info("Risk assessment completed. level=%s", assessment.risk_level)
 
-        payload: dict[str, Any] = {
+        payload = {
             "analysis": answer,
             "risk_level": assessment.risk_level,
             "missing_information": list(assessment.missing_information),

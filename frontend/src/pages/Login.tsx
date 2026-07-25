@@ -7,13 +7,13 @@ import {
   Eye,
   EyeOff,
   Globe,
-  Scale,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { Logo } from '@/components/Logo'
 
 interface LoginForm {
   email: string
@@ -80,9 +80,7 @@ export function LoginPage() {
         />
         <div className="relative">
           <div className="flex items-center gap-3">
-            <div className="flex size-11 items-center justify-center rounded-xl bg-brand">
-              <Scale className="size-6" />
-            </div>
+            <Logo className="size-11 rounded-xl" />
             <div>
               <p className="text-xl font-bold">LegalLink</p>
               <p className="text-xs uppercase tracking-widest text-slate-400">
@@ -111,9 +109,9 @@ export function LoginPage() {
       <main className="flex items-center justify-center bg-white px-6 py-12">
         <div className="w-full max-w-md animate-[fadeIn_0.4s_ease]">
           <div className="mb-8 flex items-center gap-2 lg:hidden">
-            <div className="flex size-9 items-center justify-center rounded-lg bg-brand text-white">
-              <Scale className="size-5" />
-            </div>
+            <span className="flex size-9 items-center justify-center rounded-lg bg-primary">
+              <Logo className="size-6" />
+            </span>
             <span className="text-lg font-bold text-navy">LegalLink</span>
           </div>
 

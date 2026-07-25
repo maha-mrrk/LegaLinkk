@@ -207,6 +207,22 @@ class DocumentService:
             raise NotFoundError(f"Document {document_id} not found")
         return document
 
+    async def get_file(self, document_id: UUID) -> tuple[Path, str]:
+        """Return ``(absolute_path, original_filename)`` for a document's PDF.
+
+        Resolves the stored file under the storage root, falling back to the
+        persisted absolute ``file_path`` for older rows. Raises ``NotFoundError``
+        when the metadata or the file on disk is missing.
+        """
+        document = await self.get_document(document_id)
+        path = self._storage.resolve_path(document.stored_filename)
+        if not path.is_file():
+            fallback = Path(document.file_path)
+            if not fallback.is_file():
+                raise NotFoundError(f"File for document {document_id} is missing")
+            path = fallback
+        return path, document.original_filename
+
     async def delete_document(self, document_id: UUID) -> None:
         document = await self.get_document(document_id)
         stored_filename = document.stored_filename

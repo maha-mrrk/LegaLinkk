@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { ScoreGauge } from '@/components/charts/ScoreGauge'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
+import { MarkdownText } from '@/components/MarkdownText'
 import { RiskBadge } from '@/components/StatusBadge'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { useDocuments, useLegalAnalysis } from '@/hooks/useDocuments'
@@ -110,9 +111,10 @@ export function AnalysisPage() {
           {activeTab === 'Résumé' ? (
             <Card padding="lg">
               <CardHeader title="Analyse juridique" />
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-                {data.analysis}
-              </p>
+              <MarkdownText
+                content={data.analysis}
+                className="text-sm text-slate-700"
+              />
             </Card>
           ) : null}
 

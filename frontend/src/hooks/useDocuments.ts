@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { analyzeContract } from '@/services/analysis'
 import {
+  deleteDocument,
   fetchDocumentProgress,
   fetchDocuments,
   fetchRecentActivity,
@@ -39,6 +40,18 @@ export function useUploadDocument() {
     onSuccess: () => {
       // A new document appears immediately (queued); the list refreshes again
       // once processing completes (see useDocumentProgress).
+      void queryClient.invalidateQueries({ queryKey: ['documents'] })
+      void queryClient.invalidateQueries({ queryKey: ['activity'] })
+    },
+  })
+}
+
+/** Permanently delete a document, then refresh the library + recent activity. */
+export function useDeleteDocument() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: deleteDocument,
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['documents'] })
       void queryClient.invalidateQueries({ queryKey: ['activity'] })
     },

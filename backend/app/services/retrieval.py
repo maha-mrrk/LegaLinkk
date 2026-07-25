@@ -76,6 +76,27 @@ class RetrievalService:
 
         return cleaned, hits, k
 
+    async def get_document_chunks(
+        self, document_id: UUID
+    ) -> list[RetrievalHit]:
+        """Return the ENTIRE document (all chunks, ordered by ``chunk_index``).
+
+        This is the "full-document" retrieval used for complete contract analysis
+        / report generation. It deliberately bypasses query embedding and Top-K
+        cosine similarity so that no article is dropped before reaching the LLM —
+        the opposite trade-off from :meth:`retrieve_hits`, which returns only the
+        chunks most similar to a user question (correct for Q&A, wrong for a
+        whole-contract synthesis). Keep these two paths distinct.
+        """
+        logger.info("Loading full document chunks document_id=%s", document_id)
+        try:
+            hits = await self._repo.list_all_by_document(document_id)
+        except Exception as exc:
+            logger.exception("Full-document chunk load failed")
+            raise RetrievalError("Failed to load document chunks") from exc
+        logger.info("Loaded %s chunks for full-document analysis.", len(hits))
+        return hits
+
     async def retrieve(
         self,
         query: str,

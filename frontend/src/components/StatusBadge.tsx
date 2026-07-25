@@ -2,11 +2,11 @@ import { cn } from '@/lib/cn'
 import type { DocumentStatus, RiskLevel } from '@/types'
 
 const statusStyles: Record<DocumentStatus, string> = {
-  completed: 'bg-green-50 text-green-700 ring-green-200',
-  processing: 'bg-blue-50 text-blue-700 ring-blue-200',
-  queued: 'bg-amber-50 text-amber-700 ring-amber-200',
+  completed: 'bg-success-soft text-success ring-success/30',
+  processing: 'bg-primary-soft text-primary ring-primary/30',
+  queued: 'bg-warning-soft text-amber-700 ring-amber-300/60',
   pending: 'bg-slate-100 text-slate-600 ring-slate-200',
-  failed: 'bg-red-50 text-red-700 ring-red-200',
+  failed: 'bg-danger-soft text-danger ring-danger/30',
 }
 
 const statusLabels: Record<DocumentStatus, string> = {
@@ -18,9 +18,9 @@ const statusLabels: Record<DocumentStatus, string> = {
 }
 
 const riskStyles: Record<RiskLevel, string> = {
-  high: 'bg-red-50 text-red-700 ring-red-200',
-  medium: 'bg-amber-50 text-amber-700 ring-amber-200',
-  low: 'bg-green-50 text-green-700 ring-green-200',
+  high: 'bg-danger-soft text-danger ring-danger/30',
+  medium: 'bg-warning-soft text-amber-700 ring-amber-300/60',
+  low: 'bg-success-soft text-success ring-success/30',
 }
 
 const riskLabels: Record<RiskLevel, string> = {
@@ -41,7 +41,7 @@ export function StatusBadge({ status }: { status: DocumentStatus }) {
         className={cn(
           'size-1.5 rounded-full',
           status === 'completed' && 'bg-success',
-          status === 'processing' && 'bg-brand animate-pulse',
+          status === 'processing' && 'bg-primary animate-pulse',
           status === 'queued' && 'bg-warning',
           status === 'pending' && 'bg-slate-400',
           status === 'failed' && 'bg-danger',

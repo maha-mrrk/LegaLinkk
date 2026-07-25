@@ -120,6 +120,24 @@ export async function fetchDocumentProgress(
   return data
 }
 
+/**
+ * Fetch the original stored PDF as a Blob through the authenticated client.
+ * Document routes require a bearer token, so a plain <a>/window.open URL would
+ * be rejected — we fetch the bytes here and hand back a Blob the caller can turn
+ * into an object URL for in-browser preview or download.
+ */
+export async function fetchDocumentBlob(documentId: string): Promise<Blob> {
+  const { data } = await api.get(`/documents/${documentId}/file`, {
+    responseType: 'blob',
+  })
+  return data as Blob
+}
+
+/** Permanently delete a document (metadata, stored file, and embeddings). */
+export async function deleteDocument(documentId: string): Promise<void> {
+  await api.delete(`/documents/${documentId}`)
+}
+
 /** No dedicated /activity endpoint — derive it from the most recent documents. */
 export async function fetchRecentActivity(): Promise<ActivityItem[]> {
   const { data } = await api.get<{ items: BackendDocument[] }>('/documents')

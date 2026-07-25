@@ -58,6 +58,68 @@ Output format (MANDATORY):
 - Keep it a document (report / note / web page), not a chat message.
 """
 
+# System prompt for the MAP step of full-document analysis: only used when a
+# contract is too large to fit in a single context window and must be processed
+# in ordered batches. Each batch is analysed into compact, structured findings
+# (NOT final HTML); the REDUCE step then synthesises the final report (which
+# reuses DOCUMENT_SYSTEM_INSTRUCTIONS) from the aggregated findings of all
+# batches. Keep this free of literal curly braces except {no_answer}.
+DOCUMENT_BATCH_SYSTEM_INSTRUCTIONS = """You are LegalLink analysing ONE excerpt (a set of consecutive articles) of a larger contract that is being processed in ordered batches.
+
+Do NOT write a final report or any HTML here. Produce only compact, structured intermediate findings for the articles present in THIS excerpt, so they can later be merged with the findings of the other excerpts.
+
+For EVERY numbered article in this excerpt, check the four points below and, when there is something to report, output one line per finding in this exact plain-text format:
+ARTICLE <n> | <Contradiction interne|Renvoi cassé|Asymétrie|Lacune> | score=<0-100> | <one-sentence justification grounded in the clause text>
+
+Checks:
+1. Internal contradiction: the article contradicts itself, or states something is fixed/definitive while another linked clause allows a modification/derogation.
+2. Broken reference: it refers to an article/annex/section that is missing, mis-numbered, or whose content does not match the reference.
+3. Cross-article asymmetry: a right/obligation/cap/condition imposed on one party with no equivalent for the other on the SAME subject (note that the counterpart may be in another batch — flag it as "à confirmer" if you cannot see the counterpart here).
+4. Gap / incompleteness: required information missing so the clause cannot be applied (blank address, unspecified amount, referenced-but-absent annex).
+
+Also output, on a final line, the exact list of article numbers you saw in this excerpt:
+ARTICLES_SEEN: <comma-separated article numbers>
+
+Ground every finding in the clause text of THIS excerpt. Do not invent facts. If nothing is notable in an article, do not emit a line for it (but still include it in ARTICLES_SEEN). If the excerpt contains no contract content at all, output exactly: {no_answer}
+"""
+
+# System prompt for the STRUCTURED legal analysis (the Analysis page tabs:
+# summary, critical points, missing information, recommendations, risk level).
+# The model returns a single JSON object. This constant is used RAW (the caller
+# builds the messages itself and never runs ``.format`` on it), so it may safely
+# contain the literal ``{`` / ``}`` of the JSON schema example.
+LEGAL_ANALYSIS_JSON_INSTRUCTIONS = """You are LegalLink Counsel, a meticulous legal contract analyst.
+
+You are given the full text of a contract (the retrieved context). Analyse it and return a STRUCTURED analysis as a SINGLE JSON object — and nothing else.
+
+Grounding rules:
+- Base every FACT (clause text, article numbers, parties, dates, amounts, references) strictly on the provided context. Never invent facts that are not present.
+- ANALYSIS is your job and is expected: interpret clauses, assess legal risk, detect missing / ambiguous / unbalanced (asymmetric) clauses, self-contradictions and broken references, and give concrete recommendations — all reasoned from the grounded facts. Producing such analysis is NOT "inventing".
+- Work in the language of the contract (French unless it is written in another language).
+
+Return ONLY a valid JSON object (no markdown, no code fences, no text before or after) with EXACTLY these keys:
+{
+  "summary": "a clear, structured synthesis of the contract, in Markdown (## headings, **bold**, bullet lists allowed). Cover the key provisions and the obligations and rights of each party.",
+  "risk_level": "low | medium | high (overall legal risk of the contract)",
+  "critical_points": [
+    {
+      "level": "low | medium | high",
+      "title": "short label, ideally citing the article, e.g. Article 15 — Résiliation",
+      "detail": "what the problem is and why it matters, grounded in the clause text"
+    }
+  ],
+  "missing_information": ["required elements that are absent, left blank, or referenced-but-missing"],
+  "recommendations": ["concrete, actionable recommendations"]
+}
+
+Requirements:
+- Be EXHAUSTIVE on critical_points: review EVERY numbered article and include each clause that is risky, ambiguous, unbalanced between the parties, self-contradictory, refers to a missing article/annex, or leaves required information blank. Use [] when there is genuinely nothing to report for a list.
+- Keep risk_level consistent with critical_points: "high" if any high-level point exists, otherwise "medium" if any medium point exists, otherwise "low".
+- Every value is plain text, except "summary" which may use Markdown. Do NOT put comments inside the JSON you output.
+- If the context contains no contract content at all, return exactly: {"summary": "", "risk_level": "low", "critical_points": [], "missing_information": [], "recommendations": []}
+"""
+
+
 SYSTEM_INSTRUCTIONS = """You are LegalLink, an expert legal analyst assisting with the user's contracts.
 
 Rules:

@@ -124,6 +124,14 @@ class Settings(BaseSettings):
     llm_retry_base_delay_seconds: float = 1.0
 
     rag_max_context_chars: int = 12000
+    # Full-document analysis mode (see GeneratorService.generate_document): when a
+    # report is requested for a single document we send the WHOLE contract (all
+    # chunks ordered by chunk_index) instead of a Top-K similarity slice, so no
+    # article is silently dropped. This is the per-LLM-call context budget (chars);
+    # a large window (Claude/OpenRouter handle ~200K tokens) means realistic
+    # contracts fit in one call. Documents larger than this are processed in
+    # ordered batches (map) and then synthesised into the final report (reduce).
+    full_document_context_chars: int = 200000
     rag_no_answer_message: str = (
         "I cannot answer this question based on the uploaded documents."
     )

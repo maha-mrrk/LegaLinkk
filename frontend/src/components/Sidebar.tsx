@@ -5,11 +5,11 @@ import {
   FileText,
   Clock,
   Settings,
-  Scale,
   LogOut,
   X,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
+import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/cn'
 
 const navItems = [
@@ -38,25 +38,23 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
       />
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-navy text-white transition-transform duration-300 lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-gradient-to-b from-navy via-navy-soft to-primary text-white transition-transform duration-300 lg:static lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
         <div className="flex items-center justify-between px-5 py-5">
           <div className="flex items-center gap-2.5">
-            <div className="flex size-9 items-center justify-center rounded-lg bg-brand">
-              <Scale className="size-5" />
-            </div>
+            <Logo className="size-9" />
             <div>
               <p className="text-base font-bold tracking-tight">LegalLink</p>
-              <p className="text-[10px] font-medium uppercase tracking-wider text-slate-400">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-white/50">
                 Intelligence juridique
               </p>
             </div>
           </div>
           <button
             type="button"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 lg:hidden"
+            className="rounded-lg p-1.5 text-white/60 hover:bg-white/10 lg:hidden"
             onClick={onClose}
             aria-label="Fermer le menu"
           >
@@ -64,54 +62,59 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2 scrollbar-thin">
-          {navItems.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              onClick={onClose}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
-                  isActive
-                    ? 'bg-brand/20 text-white shadow-inner'
-                    : 'text-slate-300 hover:bg-white/5 hover:text-white',
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <Icon
-                    className={cn(
-                      'size-4 shrink-0',
-                      isActive ? 'text-blue-300' : 'text-slate-400',
-                    )}
-                  />
-                  <span>{label}</span>
-                  {isActive ? (
-                    <span className="ml-auto size-1.5 rounded-full bg-brand" />
-                  ) : null}
-                </>
-              )}
-            </NavLink>
-          ))}
+        <nav className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin">
+          <p className="px-3 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Menu
+          </p>
+          <div className="space-y-1">
+            {navItems.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                onClick={onClose}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
+                    isActive
+                      ? 'bg-white/15 text-white'
+                      : 'text-white/70 hover:bg-white/10 hover:text-white',
+                  )
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <Icon
+                      className={cn(
+                        'size-4 shrink-0',
+                        isActive ? 'text-white' : 'text-white/60',
+                      )}
+                    />
+                    <span>{label}</span>
+                    {isActive ? (
+                      <span className="ml-auto size-1.5 rounded-full bg-white" />
+                    ) : null}
+                  </>
+                )}
+              </NavLink>
+            ))}
+          </div>
         </nav>
 
         <div className="border-t border-white/10 p-4">
           <div className="flex items-center gap-3 rounded-xl bg-white/5 p-3">
-            <div className="flex size-10 items-center justify-center rounded-full bg-brand text-sm font-semibold">
+            <div className="flex size-10 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-white">
               {initials || '—'}
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">
                 {user?.full_name || user?.email || 'Utilisateur'}
               </p>
-              <p className="truncate text-xs text-slate-400">{user?.role}</p>
+              <p className="truncate text-xs text-white/50">{user?.role}</p>
             </div>
             <button
               type="button"
               onClick={logout}
-              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+              className="rounded-lg p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white"
               aria-label="Se déconnecter"
               title="Se déconnecter"
             >

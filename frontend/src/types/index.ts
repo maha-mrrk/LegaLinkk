@@ -147,12 +147,18 @@ export interface ChatDocumentResult {
   metadata?: Record<string, unknown>
 }
 
+export interface ChatMessageSource {
+  filename: string
+  /** Document id, when known — lets the UI open/preview the source PDF. */
+  documentId?: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: string
-  sources?: string[]
+  sources?: ChatMessageSource[]
   /** Generation time in seconds (assistant messages only). */
   elapsed?: number
   /** When set, this assistant message is a generated HTML document. */

@@ -1,8 +1,10 @@
 """Document Management API endpoints."""
 
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -240,6 +242,39 @@ async def delete_document_index(
         embedding_model=None,
         indexed_at=None,
         message="Index deleted",
+    )
+
+
+def _safe_pdf_filename(name: str | None) -> str:
+    """Return a safe ``*.pdf`` filename (no path traversal / header injection)."""
+    base = (name or "").strip() or "document"
+    base = base.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if base.lower().endswith(".pdf"):
+        base = base[:-4]
+    base = re.sub(r"[^A-Za-z0-9._ -]+", "_", base).strip(" .") or "document"
+    return f"{base[:120]}.pdf"
+
+
+@router.get(
+    "/{document_id}/file",
+    summary="View or download the original PDF file",
+    description=(
+        "Stream the stored PDF. Served inline by default (for in-browser "
+        "preview); pass ?download=true to force a file download."
+    ),
+)
+async def get_document_file(
+    document_id: UUID,
+    download: bool = Query(False, description="Force an attachment download"),
+    service: DocumentService = Depends(get_document_service),
+) -> FileResponse:
+    path, original_filename = await service.get_file(document_id)
+    safe_name = _safe_pdf_filename(original_filename)
+    disposition = "attachment" if download else "inline"
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disposition}; filename="{safe_name}"'},
     )
 
 

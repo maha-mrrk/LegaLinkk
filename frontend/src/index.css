@@ -1,21 +1,48 @@
 @import "tailwindcss";
 
 @theme {
-  --color-navy: #0f172a;
-  --color-navy-soft: #1e293b;
-  --color-brand: #2563eb;
-  --color-brand-dark: #1d4ed8;
-  --color-brand-soft: #eff6ff;
-  --color-surface: #ffffff;
-  --color-canvas: #f8fafc;
-  --color-border: #e2e8f0;
+  /* ── Semantic palette (shared design system; only the hues differ per tool).
+     LegalLink = aubergine/magenta identity. ─────────────────────────────── */
+
+  /* Primary — aubergine */
+  --color-primary: #7c2d6b;
+  --color-primary-dark: #5e1f52;
+  --color-primary-soft: #f6ebf3;
+
+  /* Secondary — teal accent (complementary pop, links, avatars) */
+  --color-secondary: #0d9488;
+  --color-secondary-soft: #e6f7f5;
+
+  /* Neutrals */
+  --color-neutral: #64748b;
   --color-muted: #64748b;
-  --color-success: #22c55e;
+  --color-surface: #ffffff;
+  --color-canvas: #f7f4f9;
+  --color-border: #e9e3ef;
+
+  /* Status */
+  --color-success: #15a06e;
+  --color-success-soft: #e7f6ef;
   --color-warning: #f59e0b;
-  --color-danger: #ef4444;
+  --color-warning-soft: #fdf3e5;
+  --color-danger: #e5484d;
+  --color-danger-soft: #fdecec;
+  --color-info: #2563eb;
+  --color-info-soft: #eff6ff;
+
+  /* Sidebar / dark surfaces — deep aubergine */
+  --color-navy: #360c31;
+  --color-navy-soft: #4a1342;
+
+  /* Back-compat aliases: existing screens use `brand` — keep it mapped to the
+     new primary so the whole app adopts the identity without renaming tokens. */
+  --color-brand: #7c2d6b;
+  --color-brand-dark: #5e1f52;
+  --color-brand-soft: #f6ebf3;
+
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.05), 0 1px 3px 0 rgb(15 23 42 / 0.08);
-  --shadow-panel: 0 10px 25px -5px rgb(15 23 42 / 0.08), 0 8px 10px -6px rgb(15 23 42 / 0.06);
+  --shadow-card: 0 1px 2px 0 rgb(54 12 49 / 0.06), 0 1px 3px 0 rgb(54 12 49 / 0.10);
+  --shadow-panel: 0 10px 25px -5px rgb(54 12 49 / 0.10), 0 8px 10px -6px rgb(54 12 49 / 0.06);
 }
 
 @layer base {
