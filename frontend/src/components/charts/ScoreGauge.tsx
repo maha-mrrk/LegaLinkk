@@ -8,6 +8,8 @@ export function ScoreGauge({
   const clamped = Math.max(0, Math.min(100, score))
   const circumference = Math.PI * 90
   const offset = circumference - (clamped / 100) * circumference
+  const isHighRisk = clamped < 50
+  const color = isHighRisk ? '#EF4444' : '#22C55E'
 
   return (
     <div className="flex flex-col items-center">
@@ -23,7 +25,7 @@ export function ScoreGauge({
           <path
             d="M 20 100 A 80 80 0 0 1 180 100"
             fill="none"
-            stroke="#22C55E"
+            stroke={color}
             strokeWidth="14"
             strokeLinecap="round"
             strokeDasharray={circumference}
@@ -38,7 +40,13 @@ export function ScoreGauge({
           </p>
         </div>
       </div>
-      <p className="mt-1 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
+      <p
+        className={
+          isHighRisk
+            ? 'mt-1 rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700'
+            : 'mt-1 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700'
+        }
+      >
         {label}
       </p>
     </div>

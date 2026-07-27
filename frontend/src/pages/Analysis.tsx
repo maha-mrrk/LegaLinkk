@@ -3,17 +3,26 @@ import { useParams } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
+  Download,
   FileText,
   HelpCircle,
+  Loader2,
+  RefreshCw,
 } from 'lucide-react'
 import { ScoreGauge } from '@/components/charts/ScoreGauge'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
 import { MarkdownText } from '@/components/MarkdownText'
 import { RiskBadge } from '@/components/StatusBadge'
+import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { useDocuments, useLegalAnalysis } from '@/hooks/useDocuments'
+import {
+  useDocuments,
+  useLegalAnalysis,
+  useRefreshLegalAnalysis,
+} from '@/hooks/useDocuments'
 import { cn } from '@/lib/cn'
-import type { RiskLevel } from '@/types'
+import { downloadDocumentPdf } from '@/services/chat'
+import type { LegalAnalysis, RiskLevel } from '@/types'
 
 const tabs = [
   'Résumé',
@@ -29,11 +38,221 @@ const RISK_META: Record<RiskLevel, { score: number; label: string }> = {
   high: { score: 32, label: 'Risque élevé' },
 }
 
+function formatAnalyzedAt(value: unknown): string | null {
+  if (typeof value !== 'string' || !value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+function renderInlineMarkdown(value: string): string {
+  return escapeHtml(value)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<u>$1</u>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+}
+
+function splitTableRow(value: string): string[] {
+  return value
+    .trim()
+    .replace(/^\||\|$/g, '')
+    .split('|')
+    .map((cell) => cell.trim())
+}
+
+/** Convert the safe Markdown subset used by analyses into printable HTML. */
+function analysisMarkdownToHtml(markdown: string): string {
+  const lines = (markdown || '').replace(/\r\n/g, '\n').split('\n')
+  const html: string[] = []
+  let list: 'ul' | 'ol' | null = null
+
+  const closeList = () => {
+    if (list) html.push(`</${list}>`)
+    list = null
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].trim()
+    if (!line) {
+      closeList()
+      continue
+    }
+
+    if (
+      line.includes('|') &&
+      i + 1 < lines.length &&
+      splitTableRow(lines[i + 1]).every((cell) => /^:?-{1,}:?$/.test(cell))
+    ) {
+      closeList()
+      const headers = splitTableRow(line)
+      const rows: string[][] = []
+      i += 2
+      while (i < lines.length && lines[i].trim().includes('|')) {
+        rows.push(splitTableRow(lines[i]))
+        i += 1
+      }
+      i -= 1
+      html.push(
+        '<table><thead><tr>',
+        ...headers.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`),
+        '</tr></thead><tbody>',
+        ...rows.map(
+          (row) =>
+            `<tr>${headers
+              .map(
+                (_header, index) =>
+                  `<td>${renderInlineMarkdown(row[index] ?? '')}</td>`,
+              )
+              .join('')}</tr>`,
+        ),
+        '</tbody></table>',
+      )
+      continue
+    }
+
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+    if (heading) {
+      closeList()
+      const level = Math.min(4, heading[1].length + 1)
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`)
+      continue
+    }
+
+    const unordered = /^[-*•]\s+(.*)$/.exec(line)
+    const ordered = /^\d+[.)]\s+(.*)$/.exec(line)
+    if (unordered || ordered) {
+      const nextList = ordered ? 'ol' : 'ul'
+      if (list !== nextList) {
+        closeList()
+        list = nextList
+        html.push(`<${nextList}>`)
+      }
+      html.push(`<li>${renderInlineMarkdown((unordered ?? ordered)?.[1] ?? '')}</li>`)
+      continue
+    }
+
+    closeList()
+    html.push(`<p>${renderInlineMarkdown(line)}</p>`)
+  }
+  closeList()
+  return html.join('')
+}
+
+function buildAnalysisPdfHtml(params: {
+  filename: string
+  analysis: LegalAnalysis
+  score: number
+  riskLabel: string
+  analyzedAt: string | null
+}): string {
+  const { filename, analysis, score, riskLabel, analyzedAt } = params
+  const findings = analysis.metadata?.risk_findings ?? []
+  const danger = score < 50
+  const accent = danger ? '#dc2626' : '#16a34a'
+  const soft = danger ? '#fef2f2' : '#f0fdf4'
+  const section = (title: string, body: string) =>
+    `<section><h2>${escapeHtml(title)}</h2>${body}</section>`
+  const list = (items: string[]) =>
+    items.length
+      ? `<ul>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ul>`
+      : '<p class="muted">Aucun élément identifié.</p>'
+
+  return `<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Analyse juridique — ${escapeHtml(filename)}</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #1e293b; font: 10.5pt/1.55 Arial, sans-serif; }
+    header { border-bottom: 2px solid #7c2869; margin-bottom: 22px; padding-bottom: 14px; }
+    .brand { color: #7c2869; font-size: 10pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { color: #0f172a; font-size: 21pt; margin: 6px 0 3px; }
+    h2 { border-bottom: 1px solid #e2e8f0; color: #0f172a; font-size: 14pt; margin: 22px 0 10px; padding-bottom: 5px; }
+    h3, h4 { color: #0f172a; margin: 14px 0 5px; }
+    p { margin: 5px 0; }
+    ul, ol { margin: 6px 0 10px; padding-left: 22px; }
+    li { margin: 3px 0; }
+    code { background: #f1f5f9; border-radius: 3px; padding: 1px 3px; }
+    table { border-collapse: collapse; margin: 10px 0; width: 100%; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 7px; text-align: left; vertical-align: top; }
+    th { background: #f1f5f9; color: #0f172a; }
+    section { break-inside: auto; }
+    .meta { color: #64748b; font-size: 9pt; }
+    .risk { align-items: center; background: ${soft}; border: 1px solid ${accent}33; border-radius: 10px; display: flex; gap: 18px; margin: 16px 0; padding: 13px 16px; }
+    .score { color: ${accent}; font-size: 25pt; font-weight: 700; }
+    .risk-label { color: ${accent}; font-weight: 700; }
+    .finding { border-left: 4px solid ${accent}; background: #f8fafc; margin: 8px 0; padding: 8px 11px; }
+    .finding strong { display: block; }
+    .source { border-bottom: 1px solid #e2e8f0; padding: 5px 0; }
+    .muted { color: #64748b; font-style: italic; }
+    footer { border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 8pt; margin-top: 26px; padding-top: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">LegalLink</div>
+    <h1>Rapport d’analyse juridique</h1>
+    <div class="meta">${escapeHtml(filename)}${analyzedAt ? ` · Analyse du ${escapeHtml(analyzedAt)}` : ''}</div>
+  </header>
+  <div class="risk">
+    <div class="score">${score}/100</div>
+    <div><div class="risk-label">${escapeHtml(riskLabel)}</div><div class="meta">Niveau de risque global</div></div>
+  </div>
+  ${section('Résumé de l’analyse', analysisMarkdownToHtml(analysis.analysis))}
+  ${section(
+    'Points critiques',
+    findings.length
+      ? findings
+          .map(
+            (finding) =>
+              `<div class="finding"><strong>${escapeHtml(finding.category)} — ${escapeHtml(finding.level)}</strong>${renderInlineMarkdown(finding.detail)}</div>`,
+          )
+          .join('')
+      : '<p class="muted">Aucun point critique majeur détecté.</p>',
+  )}
+  ${section('Informations manquantes', list(analysis.missing_information))}
+  ${section('Recommandations', list(analysis.recommendations))}
+  ${section(
+    'Sources examinées',
+    analysis.sources.length
+      ? analysis.sources
+          .map(
+            (source) =>
+              `<div class="source"><strong>${escapeHtml(source.filename ?? 'Document')}</strong>${source.page ? ` — page ${source.page}` : ''}</div>`,
+          )
+          .join('')
+      : '<p class="muted">Aucune source disponible.</p>',
+  )}
+  <footer>Rapport généré par LegalLink. Cette analyse constitue une aide à la lecture contractuelle.</footer>
+</body>
+</html>`
+}
+
 export function AnalysisPage() {
   const { id = '' } = useParams()
   const { data: documents } = useDocuments()
   const { data, isLoading, isError, error } = useLegalAnalysis(id)
+  const refresh = useRefreshLegalAnalysis(id)
   const [activeTab, setActiveTab] = useState('Résumé')
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfError, setPdfError] = useState<string | null>(null)
 
   const document = useMemo(
     () => documents?.find((d) => d.id === id),
@@ -42,6 +261,7 @@ export function AnalysisPage() {
 
   const findings = data?.metadata?.risk_findings ?? []
   const risk = data ? RISK_META[data.risk_level] : RISK_META.medium
+  const analyzedAt = formatAnalyzedAt(data?.metadata?.analyzed_at)
 
   if (isLoading) {
     return (
@@ -67,6 +287,37 @@ export function AnalysisPage() {
     )
   }
 
+  const handleExportPdf = async () => {
+    setPdfError(null)
+    setPdfLoading(true)
+    const filename = document?.filename ?? 'contrat'
+    try {
+      const html = buildAnalysisPdfHtml({
+        filename,
+        analysis: data,
+        score: risk.score,
+        riskLabel: risk.label,
+        analyzedAt,
+      })
+      const pdfName = `${filename.replace(/\.pdf$/i, '')}-analyse.pdf`
+      const blob = await downloadDocumentPdf(html, pdfName)
+      const url = URL.createObjectURL(blob)
+      const anchor = window.document.createElement('a')
+      anchor.href = url
+      anchor.download = pdfName
+      window.document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setPdfError(
+        'L’export PDF a échoué. Veuillez réessayer dans un instant.',
+      )
+    } finally {
+      setPdfLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Card padding="lg">
@@ -82,10 +333,58 @@ export function AnalysisPage() {
               <p className="mt-0.5 text-sm text-muted">
                 {document?.pageCount ? `${document.pageCount} pages · ` : ''}
                 {document?.date ?? ''}
+                {analyzedAt ? ` · Analyse enregistrée le ${analyzedAt}` : ''}
               </p>
             </div>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              onClick={handleExportPdf}
+              disabled={pdfLoading}
+              leftIcon={
+                pdfLoading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )
+              }
+            >
+              {pdfLoading ? 'Création du PDF…' : 'Exporter en PDF'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => refresh.mutate()}
+              disabled={refresh.isPending}
+              leftIcon={
+                refresh.isPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )
+              }
+            >
+              {refresh.isPending ? 'Nouvelle analyse…' : 'Relancer l’analyse'}
+            </Button>
+          </div>
         </div>
+
+        {pdfError ? (
+          <p className="mt-3 flex items-center gap-1.5 text-xs text-danger">
+            <AlertTriangle className="size-3.5" />
+            {pdfError}
+          </p>
+        ) : null}
+
+        {refresh.isError ? (
+          <p className="mt-3 flex items-center gap-1.5 text-xs text-danger">
+            <AlertTriangle className="size-3.5" />
+            {refresh.error instanceof Error
+              ? refresh.error.message
+              : 'La nouvelle analyse a échoué.'}
+          </p>
+        ) : null}
 
         <div className="mt-5 flex gap-1 overflow-x-auto border-b border-border pb-px scrollbar-thin">
           {tabs.map((tab) => (

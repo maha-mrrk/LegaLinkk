@@ -71,6 +71,10 @@ class LegalAnalyzeRequest(BaseModel):
         default=None,
         description="Optional: restrict the analysis to a single contract",
     )
+    force_refresh: bool = Field(
+        default=False,
+        description="Ignore a stored analysis and calculate a fresh one",
+    )
     top_k: int | None = Field(default=None, ge=1, le=50)
     final_k: int | None = Field(default=None, ge=1, le=50)
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)

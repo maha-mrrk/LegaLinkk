@@ -9,12 +9,14 @@ const DEFAULT_QUESTION =
 export async function analyzeContract(params: {
   question?: string
   documentId?: string
+  forceRefresh?: boolean
   topK?: number
   finalK?: number
 }): Promise<LegalAnalysis> {
   const { data } = await api.post<LegalAnalysis>('/agents/legal/analyze', {
     question: params.question?.trim() || DEFAULT_QUESTION,
     document_id: params.documentId,
+    force_refresh: params.forceRefresh ?? false,
     top_k: params.topK ?? 15,
     final_k: params.finalK ?? 5,
   })

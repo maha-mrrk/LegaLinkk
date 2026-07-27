@@ -22,14 +22,29 @@ export function useRecentActivity() {
   })
 }
 
-/** Runs the legal analysis for a given contract (backend legal assistant). */
+/**
+ * Loads a contract analysis. The backend returns the persisted result when it
+ * exists, otherwise it calculates and stores it.
+ */
 export function useLegalAnalysis(documentId: string | undefined) {
   return useQuery({
     queryKey: ['legal-analysis', documentId],
     queryFn: () => analyzeContract({ documentId }),
     enabled: Boolean(documentId),
-    staleTime: 5 * 60_000,
+    staleTime: 30 * 60_000,
     retry: 0,
+  })
+}
+
+/** Explicitly calculate a new version and replace the local cached result. */
+export function useRefreshLegalAnalysis(documentId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      analyzeContract({ documentId, forceRefresh: true }),
+    onSuccess: (analysis) => {
+      queryClient.setQueryData(['legal-analysis', documentId], analysis)
+    },
   })
 }
 
@@ -51,9 +66,10 @@ export function useDeleteDocument() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: deleteDocument,
-    onSuccess: () => {
+    onSuccess: (_data, documentId) => {
       void queryClient.invalidateQueries({ queryKey: ['documents'] })
       void queryClient.invalidateQueries({ queryKey: ['activity'] })
+      queryClient.removeQueries({ queryKey: ['legal-analysis', documentId] })
     },
   })
 }

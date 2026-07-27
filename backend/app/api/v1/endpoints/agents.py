@@ -21,6 +21,7 @@ from app.schemas.agents import (
     LegalAnalyzeRequest,
 )
 from app.services.agent_stream import AgentStreamService
+from app.services.contract_analysis import ContractAnalysisService
 from app.services.conversation import ConversationService
 from app.services.generator import GeneratorService
 from app.services.langfuse_service import get_langfuse_service
@@ -184,26 +185,30 @@ async def agents_stream(
     description=(
         "Runs the specialized LegalAgent over the shared RAG pipeline: explains "
         "clauses, identifies obligations/rights, flags missing or ambiguous "
-        "clauses, and returns a rule-based legal risk assessment."
+        "clauses, and returns a structured legal risk assessment. For a scoped "
+        "document, an existing analysis is returned unless force_refresh is true."
     ),
 )
 async def legal_analyze(
     body: LegalAnalyzeRequest,
     legal_agent: LegalAgent = Depends(get_legal_agent),
     conversations: ConversationService = Depends(get_conversation_service),
+    db: AsyncSession = Depends(get_db),
 ) -> LegalAnalysisResponse:
     history = None
     if body.conversation_id is not None:
         messages = await conversations.load_history(body.conversation_id)
         history = ConversationService.messages_to_prompt_turns(messages)
 
-    payload = await legal_agent.analyze(
+    service = ContractAnalysisService(db, legal_agent)
+    payload = await service.get_or_analyze(
         body.question,
+        document_id=body.document_id,
+        force_refresh=body.force_refresh,
         top_k=body.top_k,
         final_k=body.final_k,
         temperature=body.temperature,
         max_tokens=body.max_tokens,
         history=history,
-        document_id=body.document_id,
     )
     return LegalAnalysisResponse.model_validate(payload)

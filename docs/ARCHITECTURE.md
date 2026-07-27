@@ -8,7 +8,7 @@
 > services, endpoints, graphs/nodes, agents, frontend routes/pages, infra services, or data
 > flows). See `.cursor/rules/keep-architecture-doc-updated.mdc`.
 >
-> _Last verified: 2026-07-21 (production-hardening pass: provider layer, reliability, error handling)._
+> _Last verified: 2026-07-27 (persisted per-document contract analyses)._
 
 ---
 
@@ -108,7 +108,7 @@ backend/
 ├─ Dockerfile                # python:3.12-slim-bookworm; poetry; paddle/torch libs
 ├─ pyproject.toml / poetry.lock
 ├─ .env                      # runtime configuration
-├─ alembic/                  # DB migrations (versions/001..007) + env.py
+├─ alembic/                  # DB migrations (versions/001..008) + env.py
 └─ app/
    ├─ main.py                # FastAPI factory, CORS, exception handler, lifespan
    ├─ __init__.py            # __version__
@@ -121,10 +121,10 @@ backend/
    ├─ db/
    │  ├─ base.py             # DeclarativeBase + TimestampMixin
    │  └─ session.py          # async engine, get_db(), task_session()
-   ├─ models/                # SQLAlchemy ORM (document, chunk, embedding, conversation, user)
-   ├─ repositories/          # data-access layer (one per aggregate)
+   ├─ models/                # SQLAlchemy ORM (document, analysis, chunk, embedding, conversation, user)
+   ├─ repositories/          # data-access layer (including persisted document analyses)
    ├─ schemas/               # Pydantic request/response DTOs
-   ├─ services/              # business logic (single source of truth)
+   ├─ services/              # business logic (including ContractAnalysisService cache)
    │  └─ llm/                # LLM provider abstraction + OpenAI-compatible client
    ├─ agents/                # TWO layers (see §6):
    │  ├─ base_agent.py       # BaseGraphAgent (LangGraph node contract)
@@ -263,7 +263,7 @@ All SQL lives in `repositories/`:
 ## 4. Database
 
 PostgreSQL 16 with the **`vector`** extension. Schema is managed by Alembic
-(`versions/001`→`007`). Async access via `asyncpg`; Alembic uses sync `psycopg2`.
+(`versions/001`→`008`). Async access via `asyncpg`; Alembic uses sync `psycopg2`.
 
 ### Tables
 
@@ -296,6 +296,23 @@ PostgreSQL 16 with the **`vector`** extension. Schema is managed by Alembic
 | indexed_at | TIMESTAMPTZ | nullable |
 | indexed_chunk_count | INTEGER | nullable |
 | embedding_model | VARCHAR(255) | nullable |
+
+**`document_analyses`** (008) — latest persisted structured legal analysis for each contract.
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID | PK |
+| document_id | UUID | FK→documents `ON DELETE CASCADE`, **unique indexed** |
+| status | ENUM `analysis_status` | `processing/completed/failed` |
+| payload | JSONB | complete `LegalAnalysisResponse`; nullable while processing/failed |
+| analysis_version | VARCHAR(32) | invalidates results after prompt/schema/risk-rule changes |
+| request_fingerprint | VARCHAR(64) | SHA-256 of question and generation parameters |
+| model | VARCHAR(255) | provider model used, nullable |
+| error_message | TEXT | safe failure message, nullable |
+| created_at / updated_at | TIMESTAMPTZ | server default `now()` |
+
+`processing` rows prevent duplicate generation in the same API process. If the API restarts
+mid-generation, `ContractAnalysisService` recognizes rows older than the current process and
+reclaims them on the next request instead of leaving the contract permanently blocked.
 
 **`document_chunks`** (004) — semantic chunks.
 | Column | Type | Notes |
@@ -331,7 +348,8 @@ PostgreSQL 16 with the **`vector`** extension. Schema is managed by Alembic
 ENUM `message_role` (`user/assistant`), `content` TEXT, `created_at`, `metadata` JSONB default
 `{}`.
 
-**Enums:** `document_status`, `extraction_method`, `index_status`, `message_role`.
+**Enums:** `document_status`, `extraction_method`, `index_status`, `message_role`,
+`analysis_status`.
 
 ### ER Diagram
 ```mermaid
@@ -356,6 +374,15 @@ erDiagram
     int page_count
     int indexed_chunk_count
     string embedding_model
+  }
+  DOCUMENT_ANALYSES {
+    uuid id PK
+    uuid document_id FK "unique"
+    enum status
+    jsonb payload
+    string analysis_version
+    string request_fingerprint
+    string model
   }
   DOCUMENT_CHUNKS {
     uuid id PK
@@ -386,6 +413,7 @@ erDiagram
 
   DOCUMENTS ||--o{ DOCUMENT_CHUNKS : "has (cascade)"
   DOCUMENTS ||--o{ CHUNK_EMBEDDINGS : "has (cascade)"
+  DOCUMENTS ||--o| DOCUMENT_ANALYSES : "latest analysis (cascade)"
   DOCUMENT_CHUNKS ||--|| CHUNK_EMBEDDINGS : "1:1 (unique chunk_id)"
   CONVERSATIONS ||--o{ MESSAGES : "has (cascade)"
 ```
@@ -522,7 +550,7 @@ JSON equivalent. Plain messages (no slash) still use `/chat/stream`.
 | **Multi-Agent streaming** | `AgentStreamService` (`services/agent_stream.py`) — SSE counterpart used by the Consultation slash commands. Reuses the **same** specialized prompts + `GeneratorService` (single agent → `stream_answer`; `/synthese` → three `answer_question` calls then a streamed synthesis via the LLM provider). Emits `agent`/`status`/`analyses`/`sources`/`delta`/`done` | `POST /agents/stream` — Consultation **slash commands** (fragmented) |
 | **Legal/Finance/Compliance nodes** | `LegalNode`/`FinanceNode`/`ComplianceNode` (`agents/nodes/`, share `DomainAgentNode`) — each reuses the injected `GeneratorService` RAG pipeline with a specialized system prompt (`LEGAL_SYSTEM_PROMPT`, `FINANCE_SYSTEM_PROMPT`, `COMPLIANCE_SYSTEM_PROMPT`); write `{legal,finance,compliance}_result` on the state | Multi-agent graph nodes |
 | **SynthesisNode** | `agents/nodes/synthesis_node.py` — reads the three result fields and calls the LLM provider with `SYNTHESIS_SYSTEM_PROMPT` to weigh/cross-reference them into `final_recommendation` (no retrieval, no new facts) | Multi-agent graph fan-in |
-| **LegalAgent** | `LegalAgent.analyze` — `GeneratorService.analyze_contract` (structured JSON: summary/risk/critical points/missing info/recommendations, full-document grounded) with `RuleBasedRiskClassifier` fallback | `POST /agents/legal/analyze` (used by Analysis page) |
+| **LegalAgent** | `LegalAgent.analyze` — `GeneratorService.analyze_contract` (structured JSON: summary/risk/critical points/missing info/recommendations, full-document grounded) with `RuleBasedRiskClassifier` fallback. `ContractAnalysisService` wraps it with get-or-compute persistence in `document_analyses`; cache identity uses document + analysis version + request fingerprint | `POST /agents/legal/analyze` (used by Analysis page) |
 
 ```mermaid
 flowchart LR
@@ -602,7 +630,7 @@ Base prefix: `/api/v1`. All `documents`, `retrieval`, `chat`, `agents` routers r
 |---|---|---|---|---|
 | POST `/agents/query` | `AgentQueryRequest{question, document_id?, top_k?, final_k?, temperature?, max_tokens?}` | `AgentQueryResponse` — either `{mode:"single", agent, response}` (a `/legal\|/finance\|/compliance` command) or `{mode:"multi", recommendation, legal, finance, compliance}` (default) | `build_multi_agent_graph` → nodes | pgvector; LLM |
 | POST `/agents/stream` | same `AgentQueryRequest` | **SSE** stream — `agent` (once), then single-agent `sources`+`delta`*+`done`, or multi `status`*+`analyses`+`delta`* (streamed synthesis)+`done`; `error` on failure | `AgentStreamService` (reuses `GeneratorService.stream_answer` / `answer_question` + LLM provider; same specialized prompts) | pgvector; LLM |
-| POST `/agents/legal/analyze` | `LegalAnalyzeRequest{question, document_id?, conversation_id?, ...}` | `LegalAnalysisResponse{analysis, risk_level, missing_information[], sources[], recommendations[], metadata}` | `LegalAgent.analyze` (+history) | pgvector; LLM |
+| POST `/agents/legal/analyze` | `LegalAnalyzeRequest{question, document_id?, conversation_id?, force_refresh=false, ...}` | `LegalAnalysisResponse{analysis, risk_level, missing_information[], sources[], recommendations[], metadata}`; scoped calls return a matching stored result immediately, otherwise calculate and persist it | `ContractAnalysisService.get_or_analyze` → `LegalAgent.analyze` on cache miss | SELECT/UPSERT `document_analyses`; pgvector + LLM only on miss/refresh |
 
 **Typical flow example (`/chat/stream`):** endpoint → `GeneratorService.stream_answer` →
 `_retrieve_and_rerank` (embed → pgvector → CrossEncoder) → `_prepare_prompt` → yields `sources`,
@@ -674,8 +702,10 @@ professional, non-technical payload and **never** a stack trace or internal deta
   **600s**; request interceptor injects Bearer token; response interceptor on **401** clears token
   and hard-redirects to `/login` (except `/auth/*`).
 - **Services:** `auth.ts` (`/auth/*`), `documents.ts` (`/documents*`), `chat.ts` (`askQuestion`
-  ⚠ unused, `streamQuestion` SSE via `fetch`), `analysis.ts` (`/agents/legal/analyze`).
-- **Hooks (`useDocuments.ts`):** `useDocuments`, `useRecentActivity`, `useLegalAnalysis(id)`,
+  ⚠ unused, `streamQuestion` SSE via `fetch`), `analysis.ts` (`/agents/legal/analyze`, including
+  explicit `force_refresh`).
+- **Hooks (`useDocuments.ts`):** `useDocuments`, `useRecentActivity`, `useLegalAnalysis(id)`
+  (backend-persisted get-or-compute result), `useRefreshLegalAnalysis(id)` (explicit recompute),
   `useUploadDocument`, `useDocumentProgress(id)` (polls every 1.5s until terminal).
 - **State management:** React Query for server state (keys `['documents']`, `['activity']`,
   `['legal-analysis', id]`, `['document-progress', id]`); local `useState` per page; no
@@ -683,6 +713,11 @@ professional, non-technical payload and **never** a stack trace or internal deta
 - **Pages:** Dashboard/Documents/History/Analysis/Settings/Login/Consultation are **wired to the
   backend**; `mock.ts` is largely unused (only chat `suggestions`); some chart components and the
   History period filter are cosmetic.
+- **Analysis page:** opening `/analysis/:id` returns the stored per-document analysis when valid;
+  the first visit computes and persists it. The header shows the saved timestamp and exposes
+  **Relancer l’analyse** to force a replacement. **Exporter en PDF** builds a deterministic,
+  styled report from the stored structured result (summary, score, findings, missing information,
+  recommendations, sources) and reuses `POST /chat/document/pdf` / WeasyPrint for the download.
 - **Communication with FastAPI:** REST via axios; SSE via `fetch` + `ReadableStream` for streaming
   chat; dev requests proxied `/api` → `http://localhost:8000`.
 
