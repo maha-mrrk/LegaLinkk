@@ -52,6 +52,7 @@ async def test_completed_matching_analysis_is_returned_without_llm() -> None:
 
     result = await service.get_or_analyze(
         question,
+        user_id=uuid4(),
         document_id=document_id,
         top_k=15,
         final_k=5,
@@ -78,6 +79,7 @@ async def test_cache_miss_computes_and_persists_analysis() -> None:
 
     result = await service.get_or_analyze(
         "Analyse ce contrat.",
+        user_id=uuid4(),
         document_id=document_id,
         top_k=15,
         final_k=5,
@@ -105,6 +107,7 @@ async def test_processing_analysis_prevents_duplicate_generation() -> None:
     with pytest.raises(AppError) as captured:
         await service.get_or_analyze(
             "Analyse ce contrat.",
+            user_id=uuid4(),
             document_id=document_id,
         )
 
@@ -136,6 +139,7 @@ async def test_processing_row_from_previous_process_is_reclaimed() -> None:
 
     result = await service.get_or_analyze(
         "Analyse ce contrat.",
+        user_id=uuid4(),
         document_id=document_id,
     )
 

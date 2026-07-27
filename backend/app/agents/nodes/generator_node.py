@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Sequence
+from uuid import UUID
 
 from app.agents.base_agent import BaseGraphAgent
 from app.agents.nodes._state_utils import ensure_metadata
@@ -53,6 +54,7 @@ class GeneratorNode(BaseGraphAgent):
             logger.info("GeneratorNode: running full RAG pipeline")
             result = await self._generator.answer_question(
                 question,
+                user_id=UUID(str(metadata["user_id"])),
                 top_k=metadata.get("top_k"),
                 final_k=metadata.get("final_k"),
                 history=history,

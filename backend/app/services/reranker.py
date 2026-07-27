@@ -125,6 +125,7 @@ class RerankerService:
         self,
         query: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         final_k: int | None = None,
         document_id: UUID | None = None,
@@ -148,6 +149,7 @@ class RerankerService:
 
         cleaned, hits, _ = await self._retrieval.retrieve_hits(
             query,
+            user_id=user_id,
             top_k=candidate_k,
             document_id=document_id,
             log_search_as="Retrieving vectors...",

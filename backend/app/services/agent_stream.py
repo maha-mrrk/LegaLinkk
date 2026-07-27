@@ -87,6 +87,7 @@ class AgentStreamService:
         self,
         question: str,
         *,
+        user_id: UUID,
         document_id: UUID | None = None,
         top_k: int | None = None,
         final_k: int | None = None,
@@ -102,6 +103,7 @@ class AgentStreamService:
             async for event in self._stream_single(
                 domain,
                 remainder,
+                user_id=user_id,
                 document_id=document_id,
                 top_k=top_k,
                 final_k=final_k,
@@ -113,6 +115,7 @@ class AgentStreamService:
 
         async for event in self._stream_multi(
             raw,
+            user_id=user_id,
             document_id=document_id,
             top_k=top_k,
             final_k=final_k,
@@ -126,6 +129,7 @@ class AgentStreamService:
         domain: str,
         question: str,
         *,
+        user_id: UUID,
         document_id: UUID | None,
         top_k: int | None,
         final_k: int | None,
@@ -138,6 +142,7 @@ class AgentStreamService:
         yield {"type": "agent", "mode": "single", "domain": domain, "label": agent_name}
         async for event in self._generator.stream_answer(
             question,
+            user_id=user_id,
             top_k=top_k,
             final_k=final_k,
             temperature=temperature,
@@ -151,6 +156,7 @@ class AgentStreamService:
         self,
         question: str,
         *,
+        user_id: UUID,
         document_id: UUID | None,
         top_k: int | None,
         final_k: int | None,
@@ -169,6 +175,7 @@ class AgentStreamService:
             try:
                 rag = await self._generator.answer_question(
                     question,
+                    user_id=user_id,
                     top_k=top_k,
                     final_k=final_k,
                     temperature=temperature,

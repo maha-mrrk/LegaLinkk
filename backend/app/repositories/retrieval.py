@@ -37,6 +37,7 @@ class RetrievalRepository:
         self,
         query_embedding: list[float],
         *,
+        user_id: UUID,
         top_k: int = 5,
         document_id: UUID | None = None,
     ) -> list[RetrievalHit]:
@@ -54,7 +55,10 @@ class RetrievalRepository:
         stmt: Select = (
             select(DocumentEmbedding, similarity)
             .join(Document, Document.id == DocumentEmbedding.document_id)
-            .where(Document.index_status == IndexStatus.INDEXED)
+            .where(
+                Document.user_id == user_id,
+                Document.index_status == IndexStatus.INDEXED,
+            )
             .order_by(distance)
             .limit(top_k)
         )
@@ -70,7 +74,7 @@ class RetrievalRepository:
         return hits
 
     async def list_all_by_document(
-        self, document_id: UUID
+        self, document_id: UUID, *, user_id: UUID
     ) -> list[RetrievalHit]:
         """Return **every** chunk of a document, ordered by ``chunk_index``.
 
@@ -87,7 +91,11 @@ class RetrievalRepository:
         """
         stmt: Select = (
             select(DocumentEmbedding)
-            .where(DocumentEmbedding.document_id == document_id)
+            .join(Document, Document.id == DocumentEmbedding.document_id)
+            .where(
+                DocumentEmbedding.document_id == document_id,
+                Document.user_id == user_id,
+            )
             .order_by(DocumentEmbedding.chunk_index.asc())
         )
         result = await self._session.execute(stmt)

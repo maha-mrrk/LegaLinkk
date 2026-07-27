@@ -8,7 +8,7 @@
 > services, endpoints, graphs/nodes, agents, frontend routes/pages, infra services, or data
 > flows). See `.cursor/rules/keep-architecture-doc-updated.mdc`.
 >
-> _Last verified: 2026-07-27 (persisted per-document contract analyses)._
+> _Last verified: 2026-07-27 (strict per-user data isolation)._
 
 ---
 
@@ -227,18 +227,20 @@ sequenceDiagram
   `get_ingestion_progress_service()`, `get_langfuse_service()`, `get_paddle_ocr_engine()`,
   `get_llm_provider()`.
 - **Auth dependency:** `get_current_user` (in `api/deps.py`) validates the
-  `Authorization: Bearer` header.
+  `Authorization: Bearer` header. Protected resource handlers pass only the resulting server-side
+  `User.id` to services; the API never accepts an owner id from the browser. Foreign UUIDs resolve
+  to the same `404` as missing resources to avoid resource-existence disclosure.
 
 ### Repository Pattern
 All SQL lives in `repositories/`:
 
 | Repository | Aggregate | Notable methods |
 |---|---|---|
-| `DocumentRepository` | documents | `create`, `get_by_id`, `list_all`, `count`, `list_by_statuses`, `delete` |
+| `DocumentRepository` | documents | Owner-scoped `get_by_id`, `list_all`, `count`, `list_by_statuses`; `create`, `delete` |
 | `DocumentChunkRepository` | document_chunks | `create_many`, `list_by_document_id`, `delete_by_document_id` |
 | `EmbeddingRepository` | chunk_embeddings | `bulk_insert`, `delete_by_document_id`, `count_by_document_id` |
-| `RetrievalRepository` | pgvector search | `search_similar(query_embedding, top_k, document_id)` |
-| `ConversationRepository` | conversations/messages | CRUD + history |
+| `RetrievalRepository` | pgvector search | `search_similar(..., user_id, document_id)` and full-document loading, both joined to the owner document |
+| `ConversationRepository` | conversations/messages | Owner-scoped CRUD + history |
 | `UserRepository` | users | `create`, `get_by_email`, `get_by_id` |
 | `VectorRepository` | (helper) | vector-related helpers |
 
@@ -263,7 +265,7 @@ All SQL lives in `repositories/`:
 ## 4. Database
 
 PostgreSQL 16 with the **`vector`** extension. Schema is managed by Alembic
-(`versions/001`→`008`). Async access via `asyncpg`; Alembic uses sync `psycopg2`.
+(`versions/001`→`009`). Async access via `asyncpg`; Alembic uses sync `psycopg2`.
 
 ### Tables
 
@@ -278,10 +280,11 @@ PostgreSQL 16 with the **`vector`** extension. Schema is managed by Alembic
 | is_active | BOOLEAN | default `true` |
 | created_at / updated_at | TIMESTAMPTZ | server default `now()` |
 
-**`documents`** (001, extended by 002/003/005) — uploaded PDF metadata + lifecycle.
+**`documents`** (001, extended by 002/003/005/009) — owner-bound uploaded PDF metadata + lifecycle.
 | Column | Type | Notes |
 |---|---|---|
 | id | UUID | PK |
+| user_id | UUID | FK→users `ON DELETE CASCADE`, first column of `ix_documents_user_id_upload_date` |
 | original_filename | VARCHAR(255) | |
 | stored_filename | VARCHAR(255) | **unique** |
 | file_path | VARCHAR(512) | on-disk path |
@@ -342,7 +345,8 @@ reclaims them on the next request instead of leaving the contract permanently bl
 | created_at / updated_at | TIMESTAMPTZ | |
 | — | — | **HNSW index** `ix_chunk_embeddings_embedding_hnsw USING hnsw (embedding vector_cosine_ops)` |
 
-**`conversations`** (006) — chat sessions: `id`, `title`, `created_at`, `updated_at`.
+**`conversations`** (006, ownership added by 009) — chat sessions: `id`, `user_id`
+(FK→users `ON DELETE CASCADE`, indexed with `updated_at`), `title`, `created_at`, `updated_at`.
 
 **`messages`** (006) — `id`, `conversation_id` (FK→conversations CASCADE, **indexed**), `role`
 ENUM `message_role` (`user/assistant`), `content` TEXT, `created_at`, `metadata` JSONB default
@@ -364,6 +368,7 @@ erDiagram
   }
   DOCUMENTS {
     uuid id PK
+    uuid user_id FK
     string original_filename
     string stored_filename UK
     string file_path
@@ -401,6 +406,7 @@ erDiagram
   }
   CONVERSATIONS {
     uuid id PK
+    uuid user_id FK
     string title
   }
   MESSAGES {
@@ -411,14 +417,18 @@ erDiagram
     jsonb metadata
   }
 
+  USERS ||--o{ DOCUMENTS : "owns (cascade)"
+  USERS ||--o{ CONVERSATIONS : "owns (cascade)"
   DOCUMENTS ||--o{ DOCUMENT_CHUNKS : "has (cascade)"
   DOCUMENTS ||--o{ CHUNK_EMBEDDINGS : "has (cascade)"
   DOCUMENTS ||--o| DOCUMENT_ANALYSES : "latest analysis (cascade)"
   DOCUMENT_CHUNKS ||--|| CHUNK_EMBEDDINGS : "1:1 (unique chunk_id)"
   CONVERSATIONS ||--o{ MESSAGES : "has (cascade)"
 ```
-> Note: `users` is currently standalone — documents/conversations are **not** foreign-keyed to a
-> user (no per-user ownership yet). See §13.
+
+Migration 009 added both owner columns as nullable, assigned all legacy rows to the earliest account
+(`users.created_at`, then UUID), and only then enforced `NOT NULL`, foreign keys, and owner-first
+indexes. Child rows inherit isolation through their document/conversation parent.
 
 ### pgvector integration
 - Extension enabled by migration 005 (`CREATE EXTENSION IF NOT EXISTS vector`).
@@ -444,7 +454,7 @@ flowchart LR
 
 | Stage | Input | Output | Class / Service | Repository | DB interaction |
 |---|---|---|---|---|---|
-| **Upload** | `UploadFile` | `Document` row + stored file + `task_id` | `DocumentService.upload` | `DocumentRepository` | INSERT `documents` (status `uploaded`); file → `storage/documents` |
+| **Upload** | `UploadFile` + authenticated user | Owner-bound `Document` row + stored file + `task_id` | `DocumentService.upload` | `DocumentRepository` | INSERT `documents(user_id, …)` (status `uploaded`); file → `storage/documents` |
 | **Parse** | `file_path` | text + page_count + `pdf_parser` method | `ParserNode` → `PdfParser` (PyMuPDF `fitz`) | — | none |
 | **OCR** (conditional) | `file_path` | text + `paddle_ocr` method | `OCRNode` → `run_paddle_ocr_subprocess` / `PaddleOcrEngine` | — | none (isolated subprocess) |
 | **Clean** | raw text/pages | normalized text | `CleaningNode` → `text_cleaner.clean_text/clean_pages` | — | none |
@@ -452,7 +462,7 @@ flowchart LR
 | **Persist** | chunk drafts | `document_chunks` rows; status `processed` | graph `persist_step` → `DocumentProcessingService.finalize_chunks` | `DocumentChunkRepository.create_many` | INSERT chunks; UPDATE document |
 | **Embed** | chunk texts | `list[vector]` | `EmbeddingNode` → `EmbeddingService.embed_batch` (FastEmbed bge-m3) | — | none |
 | **Index** | chunks (+ reused vectors) | `chunk_embeddings` rows; `index_status=indexed` | `IndexingNode` → `IndexingService.index_document` | `EmbeddingRepository.bulk_insert` | DELETE old + INSERT vectors; UPDATE document |
-| **Retrieve** | query text | Top-K `RetrievalHit[]` | `RetrievalService.retrieve_hits` → `EmbeddingService.embed_query` | `RetrievalRepository.search_similar` | pgvector cosine SELECT |
+| **Retrieve** | query text + authenticated `user_id` | Top-K `RetrievalHit[]` from only that user's contracts | `RetrievalService.retrieve_hits` → `EmbeddingService.embed_query` | `RetrievalRepository.search_similar` | pgvector cosine SELECT joined to `documents.user_id` |
 | **Rerank** | query + hits | `RerankedHit[]` (final_k) | `RerankerService.rerank_hits` (CrossEncoder bge-reranker-v2-m3) | — | none |
 | **Generate** | question + reranked chunks | grounded answer + sources + metadata | `GeneratorService.generate_from_chunks` → `PromptBuilder` + LLM provider | — | none (HTTP to LLM) |
 | **Response** | answer | JSON / SSE stream | endpoint (`/chat/*`) | — | conversation path writes `messages` |
@@ -460,6 +470,11 @@ flowchart LR
 Performance note: `IndexingService.index_document` accepts `precomputed_embeddings` so the
 ingestion graph reuses `EmbeddingNode` vectors instead of re-embedding (identical result, one
 fewer embedding pass).
+
+Security invariant: both Top-K mode and full-document mode require a server-derived `user_id`.
+`RetrievalRepository` joins `documents` and filters `documents.user_id`, including when no
+`document_id` is selected ("all my contracts"). A supplied foreign document UUID therefore
+produces no chunks and cannot cross tenant boundaries.
 
 ---
 
@@ -478,7 +493,8 @@ fewer embedding pass).
   extracted_text, cleaned_text, chunks, embeddings, retrieved_chunks, reranked_chunks,
   user_question, llm_response`) **plus** the multi-agent fields (`user_query, target_agent,
   legal_result, finance_result, compliance_result, final_recommendation`) and the cross-cutting
-  `metadata, errors`.
+  `metadata, errors`. Request graphs carry the authenticated owner id in `metadata.user_id`;
+  retrieval/generator nodes require it and propagate it to owner-scoped services.
 - **`GraphBuilder`** (`graphs/graph_builder.py`) — ✗ **placeholder**:
   `add_node/add_edge/set_entry_point` fluent stubs; `build()` raises `NotImplementedError`;
   **zero runtime callers**. Real graphs use LangGraph's native `StateGraph` directly — the name
@@ -577,7 +593,9 @@ flowchart LR
 ## 8. API Documentation
 
 Base prefix: `/api/v1`. All `documents`, `retrieval`, `chat`, `agents` routers require
-`Authorization: Bearer <JWT>`.
+`Authorization: Bearer <JWT>`. Every document/conversation operation and every retrieval path is
+scoped by the `User.id` decoded from that JWT. Client payloads contain no `user_id`; access to a
+foreign UUID returns `404`.
 
 ### Auth (public)
 | Method / URL | Request | Response | Service | DB |
@@ -595,7 +613,7 @@ Base prefix: `/api/v1`. All `documents`, `retrieval`, `chat`, `agents` routers r
 | Method / URL | Request | Response | Service | DB |
 |---|---|---|---|---|
 | POST `/documents` | multipart `file` | `202 DocumentUploadResponse {document_id, task_id, status, filename, message}` | `DocumentService.upload` → Celery enqueue | INSERT `documents`; Redis queued |
-| GET `/documents` | `skip,limit` | `DocumentListResponse` | `DocumentService.list_documents` | SELECT + COUNT |
+| GET `/documents` | `skip,limit` | `DocumentListResponse` | `DocumentService.list_documents` | owner-filtered SELECT + COUNT |
 | GET `/documents/{id}` | — | `DocumentResponse` | `DocumentService.get_document` | SELECT |
 | DELETE `/documents/{id}` | — | `204` | `DocumentService.delete_document` | DELETE (+ file) |
 | GET `/documents/{id}/chunks` | — | `DocumentChunkListResponse` | `DocumentProcessingService.get_chunks` | SELECT chunks |
@@ -605,12 +623,12 @@ Base prefix: `/api/v1`. All `documents`, `retrieval`, `chat`, `agents` routers r
 | POST `/documents/{id}/index` | — | `DocumentIndexResponse` | `IndexingService.index_document` | INSERT vectors |
 | DELETE `/documents/{id}/index` | — | `DocumentIndexResponse` | `IndexingService.delete_index` | DELETE vectors |
 | GET `/documents/{id}/index-status` | — | `DocumentIndexStatusResponse` | `IndexingService.get_index_status` | SELECT/COUNT |
-| POST `/documents/reindex` | — | `DocumentReindexResponse` | `IndexingService.reindex_all` | bulk re-index |
+| POST `/documents/reindex` | — | `DocumentReindexResponse` | `IndexingService.reindex_all` | bulk re-index of current user's documents |
 
 ### Retrieval (protected)
 | Method / URL | Request | Response | Service | DB |
 |---|---|---|---|---|
-| POST `/retrieve` | `{query, top_k?}` | `RetrieveResponse{query, top_k, results[]}` | `RetrievalService.retrieve` | pgvector SELECT |
+| POST `/retrieve` | `{query, top_k?}` | `RetrieveResponse{query, top_k, results[]}` | `RetrievalService.retrieve` | owner-filtered pgvector SELECT |
 | POST `/retrieve/rerank` | `{query, top_k?, final_k?}` | `RerankResponse{..., reranker_model, results[]}` | `RerankerService.retrieve_and_rerank` | pgvector SELECT |
 
 ### Chat (protected)
@@ -637,8 +655,9 @@ Base prefix: `/api/v1`. All `documents`, `retrieval`, `chat`, `agents` routers r
 then LLM `stream_complete` deltas, then `done` (includes the full `answer` as a fallback).
 
 **Document scoping (all chat endpoints):** `ChatQueryRequest` accepts an optional `document_id`.
-When set, retrieval is filtered to that single document (`RetrievalService.search_similar(...,
-document_id=...)`); when omitted/null, answers are grounded on the **entire** library (default).
+When set, retrieval is filtered to that single owned document (`RetrievalService.search_similar(...,
+user_id=..., document_id=...)`); when omitted/null, answers are grounded on the authenticated
+user's **entire** library (default), never the global database.
 `/chat/query` propagates it via `GraphState.document_id` (read by `RetrievalNode`); `/chat/stream`
 and `/chat/document` pass it straight to `GeneratorService`. The Consultation UI exposes this as a
 scope selector ("Tous les documents" vs a specific indexed document) shown in the chat header.
@@ -698,6 +717,8 @@ professional, non-technical payload and **never** a stack trace or internal deta
 - **Auth (`context/AuthContext.tsx`, `RequireAuth`):** token in `localStorage`
   (`legallink_token`); on mount, hydrates via `GET /auth/me`; `login/register/logout`;
   `RequireAuth` shows a spinner during hydration then redirects unauthenticated users to `/login`.
+  Successful login/register and logout clear the React Query cache before the account state changes,
+  preventing stale server data from the previous account from flashing in the UI.
 - **API client (`services/api.ts`):** axios `baseURL = VITE_API_BASE_URL ?? '/api/v1'`, timeout
   **600s**; request interceptor injects Bearer token; response interceptor on **401** clears token
   and hard-redirects to `/login` (except `/auth/*`).
@@ -709,7 +730,9 @@ professional, non-technical payload and **never** a stack trace or internal deta
   `useUploadDocument`, `useDocumentProgress(id)` (polls every 1.5s until terminal).
 - **State management:** React Query for server state (keys `['documents']`, `['activity']`,
   `['legal-analysis', id]`, `['document-progress', id]`); local `useState` per page; no
-  Redux/Zustand. Chat messages are ephemeral (in-memory).
+  Redux/Zustand. Consultation history is persisted per account under
+  `legallink.conversations.v2.<user-id>`; no account reads the former global key or another
+  account's local history.
 - **Pages:** Dashboard/Documents/History/Analysis/Settings/Login/Consultation are **wired to the
   backend**; `mock.ts` is largely unused (only chat `suggestions`); some chart components and the
   History period filter are cosmetic.
@@ -910,8 +933,8 @@ React component polls.
 - RAG-graph `EmbeddingNode` is a structural no-op for queries.
 - Frontend `DocumentItem.score`/`type`/`agents` are **hardcoded placeholders** in `documents.ts`
   (not real backend fields); Analysis `ScoreGauge` maps risk→score heuristically.
-- Streaming chat is **not persisted** (ephemeral); conversation persistence exists but the UI
-  doesn't use it.
+- Streaming chat is kept in account-partitioned browser history, but streamed turns are **not yet
+  persisted in backend `messages`**; the separate conversation API supports DB persistence.
 - History "period" filter and Consultation paperclip are non-functional UI.
 - Settings profile is read-only (no update endpoint).
 
@@ -928,10 +951,12 @@ React component polls.
 - ✓ Multi-agent orchestration migrated from the hand-rolled `AgentOrchestrator`/`IntentRouter` to a
   real LangGraph `StateGraph` (`build_multi_agent_graph`): Legal/Finance/Compliance/Synthesis are
   graph nodes with conditional `/command` routing; `orchestrator.py` + `placeholder.py` removed.
+- ✓ Per-user isolation: migration 009 owns documents/conversations; endpoint, service, repository,
+  full-document and library-wide RAG paths are JWT-owner scoped; foreign UUIDs return `404`.
+  Frontend query caches are cleared on account changes and local chat history is partitioned by
+  user id. A/B regression tests cover direct-resource and retrieval IDOR boundaries.
 
 **Technical debt**
-- **No user ownership:** `documents`/`conversations` have no FK to `users`; every authenticated
-  user sees all documents (multi-tenancy gap).
 - Default `JWT_SECRET` in config must be overridden in production; CORS is fully open in dev.
 - Stale docstrings ("future"/"architecture preparation") on live components (`GraphState`,
   `BaseGraphAgent`).
@@ -950,6 +975,8 @@ React component polls.
 - Cleaning, semantic chunking, embeddings (bge-m3), pgvector storage + HNSW.
 - Retrieval (cosine Top-K), CrossEncoder reranking, grounded generation (+ streaming SSE).
 - Conversation persistence + memory; LegalAgent + structured/rule-based risk; Langfuse tracing.
+- Strict user ownership for documents/conversations and inherited isolation for chunks, vectors,
+  analyses and messages; owner-scoped RAG/agents plus account-partitioned frontend caches/history.
 - LangGraph ingestion (production), RAG graph, and **multi-agent graph** (Legal/Finance/Compliance/
   Synthesis nodes with `/command` routing); React SPA (dashboard, documents, chat, analysis,
   history, settings).
@@ -962,22 +989,21 @@ React component polls.
 - Generic `GraphBuilder` (stub).
 
 **✗ Not implemented**
-- Per-user data ownership / multi-tenancy (documents ↔ users FK, per-user filtering).
+- Organization/workspace tenancy and administrator cross-user access (current isolation is strictly
+  one account per ownership boundary).
 - Concrete LangGraph tools.
 - Streaming for conversations/agents endpoints; true parallel multi-agent (per-agent sessions).
 - Profile update, Supervision/AgentDetail pages, analytics charts wired to real data.
 
 **Recommended next steps (logical order):**
-1. **User ownership & authorization** — add `user_id` FKs + per-user filtering (foundational for
-   everything else).
-2. **Unify chat** — persist streamed answers into conversations; make the UI use conversation
+1. **Unify chat** — persist streamed answers into conversations; make the UI use conversation
    endpoints; consider streaming conversation/agent responses.
-3. **Multi-agent UI** — done for Consultation (slash commands + synthesis with the 3 detailed
+2. **Multi-agent UI** — done for Consultation (slash commands + synthesis with the 3 detailed
    analyses). Remaining: surface it on the Analysis page too if useful.
-4. **Harden production config** — real `JWT_SECRET`, scoped CORS, secrets management.
-5. **Finish/trim frontend** — route or delete Supervision/AgentDetail, wire charts to real
+3. **Harden production config** — real `JWT_SECRET`, scoped CORS, secrets management.
+4. **Finish/trim frontend** — route or delete Supervision/AgentDetail, wire charts to real
    metrics, remove dead mock/`askQuestion`.
-6. **Optional:** migrate `/chat/stream` onto a streaming-capable LangGraph path to consolidate on
+5. **Optional:** migrate `/chat/stream` onto a streaming-capable LangGraph path to consolidate on
    one orchestration model.
 
 ---
@@ -988,13 +1014,13 @@ React component polls.
 flowchart TB
   subgraph FE[Frontend - React SPA]
     PAGES[Pages: Dashboard/Documents/Consultation/Analysis/History/Settings/Login]
-    RQ[React Query + AuthContext]
+    RQ[React Query cache cleared on account switch + AuthContext]
     AX[Axios /api + fetch SSE]
   end
 
   subgraph BE[FastAPI backend /api/v1]
     RT[Routers: auth/health/documents/retrieval/chat/agents]
-    DEP[get_current_user / get_db]
+    DEP[get_current_user derives immutable owner id / get_db]
   end
 
   subgraph SVC[Services - single source of truth]
@@ -1052,7 +1078,8 @@ flowchart TB
   end
 
   PAGES --> RQ --> AX --> RT --> DEP --> SVC
-  SVC --> REPO --> PG
+  SVC --> REPO
+  REPO -- owner-scoped SQL --> PG
   DOC --> FS
   DOC -- enqueue --> REDIS --> CELERY --> DPS --> IG
   IG --> ND

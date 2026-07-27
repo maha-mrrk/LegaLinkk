@@ -3,7 +3,9 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.db.session import get_db
+from app.models.user import User
 from app.schemas.retrieval import (
     RerankRequest,
     RerankResponse,
@@ -37,9 +39,11 @@ def get_reranker_service(db: AsyncSession = Depends(get_db)) -> RerankerService:
 async def retrieve_and_rerank(
     body: RerankRequest,
     service: RerankerService = Depends(get_reranker_service),
+    current_user: User = Depends(get_current_user),
 ) -> RerankResponse:
     payload = await service.retrieve_and_rerank(
         body.query,
+        user_id=current_user.id,
         top_k=body.top_k,
         final_k=body.final_k,
     )
@@ -58,6 +62,9 @@ async def retrieve_and_rerank(
 async def retrieve(
     body: RetrieveRequest,
     service: RetrievalService = Depends(get_retrieval_service),
+    current_user: User = Depends(get_current_user),
 ) -> RetrieveResponse:
-    payload = await service.retrieve(body.query, top_k=body.top_k)
+    payload = await service.retrieve(
+        body.query, user_id=current_user.id, top_k=body.top_k
+    )
     return RetrieveResponse.model_validate(payload)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
 from app.services.generator import GeneratorService
 
@@ -77,6 +78,7 @@ class BaseAgent(ABC):
 
         result = await context.generator.answer_question(
             query,
+            user_id=UUID(str((context.extras or {})["user_id"])),
             top_k=context.top_k,
             final_k=context.final_k,
             temperature=context.temperature,

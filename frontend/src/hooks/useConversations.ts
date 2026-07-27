@@ -1,4 +1,5 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useAuth } from '@/context/AuthContext'
 import type { ChatMessage } from '@/types'
 
 export interface Conversation {
@@ -9,7 +10,7 @@ export interface Conversation {
   updatedAt: number
 }
 
-const STORAGE_KEY = 'legallink.conversations.v1'
+const STORAGE_PREFIX = 'legallink.conversations.v2'
 const MAX_CONVERSATIONS = 50
 
 function isConversation(value: unknown): value is Conversation {
@@ -18,9 +19,10 @@ function isConversation(value: unknown): value is Conversation {
   return typeof c.id === 'string' && Array.isArray(c.messages)
 }
 
-function load(): Conversation[] {
+function load(storageKey: string | null): Conversation[] {
+  if (!storageKey) return []
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey)
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -47,7 +49,8 @@ function stripDocuments(conversation: Conversation): Conversation {
  * we progressively shed generated documents and then oldest conversations rather
  * than losing the whole history.
  */
-function persist(list: Conversation[]): void {
+function persist(storageKey: string | null, list: Conversation[]): void {
+  if (!storageKey) return
   const attempts: Conversation[][] = [
     list,
     list.map(stripDocuments),
@@ -56,7 +59,7 @@ function persist(list: Conversation[]): void {
   ]
   for (const attempt of attempts) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(attempt))
+      localStorage.setItem(storageKey, JSON.stringify(attempt))
       return
     } catch {
       // Try a smaller payload.
@@ -65,9 +68,18 @@ function persist(list: Conversation[]): void {
 }
 
 export function useConversations() {
-  const [conversations, setConversations] = useState<Conversation[]>(() =>
-    load(),
+  const { user } = useAuth()
+  const storageKey = useMemo(
+    () => (user ? `${STORAGE_PREFIX}.${user.id}` : null),
+    [user],
   )
+  const [conversations, setConversations] = useState<Conversation[]>(() =>
+    load(storageKey),
+  )
+
+  useEffect(() => {
+    setConversations(load(storageKey))
+  }, [storageKey])
 
   const upsert = useCallback((conversation: Conversation) => {
     setConversations((prev) => {
@@ -77,18 +89,18 @@ export function useConversations() {
       ]
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, MAX_CONVERSATIONS)
-      persist(next)
+      persist(storageKey, next)
       return next
     })
-  }, [])
+  }, [storageKey])
 
   const remove = useCallback((id: string) => {
     setConversations((prev) => {
       const next = prev.filter((c) => c.id !== id)
-      persist(next)
+      persist(storageKey, next)
       return next
     })
-  }, [])
+  }, [storageKey])
 
   return { conversations, upsert, remove }
 }

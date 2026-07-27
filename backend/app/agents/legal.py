@@ -87,6 +87,7 @@ class LegalAgent(BaseAgent):
         self,
         question: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         final_k: int | None = None,
         temperature: float | None = None,
@@ -108,6 +109,7 @@ class LegalAgent(BaseAgent):
         logger.info("Calling GeneratorService.analyze_contract.")
         rag = await self._generator.analyze_contract(
             question,
+            user_id=user_id,
             top_k=top_k,
             final_k=final_k,
             temperature=temperature,
@@ -182,6 +184,7 @@ class LegalAgent(BaseAgent):
 
         payload = await self.analyze(
             query,
+            user_id=UUID(str((context.extras or {})["user_id"])),
             top_k=context.top_k,
             final_k=context.final_k,
             temperature=context.temperature,

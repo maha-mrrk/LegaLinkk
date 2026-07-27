@@ -10,6 +10,7 @@ source of truth).
 from __future__ import annotations
 
 from typing import Any, Sequence
+from uuid import UUID
 
 from app.agents.base_agent import BaseGraphAgent
 from app.agents.nodes._state_utils import ensure_metadata
@@ -60,6 +61,7 @@ class DomainAgentNode(BaseGraphAgent):
         try:
             rag: dict[str, Any] = await self._generator.answer_question(
                 question,
+                user_id=UUID(str(metadata["user_id"])),
                 top_k=metadata.get("top_k"),
                 final_k=metadata.get("final_k"),
                 temperature=metadata.get("temperature"),

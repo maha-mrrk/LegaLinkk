@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.db.session import get_db
+from app.models.user import User
 from app.schemas.document import (
     DocumentChunkListResponse,
     DocumentChunkResponse,
@@ -56,8 +58,9 @@ def get_indexing_service(db: AsyncSession = Depends(get_db)) -> IndexingService:
 async def upload_document(
     file: UploadFile = File(..., description="PDF file to upload"),
     service: DocumentService = Depends(get_document_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentUploadResponse:
-    result = await service.upload(file)
+    result = await service.upload(file, user_id=current_user.id)
     return DocumentUploadResponse(
         document_id=result.document.id,
         task_id=result.task_id,
@@ -80,8 +83,11 @@ async def list_documents(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     service: DocumentService = Depends(get_document_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentListResponse:
-    documents, total = await service.list_documents(skip=skip, limit=limit)
+    documents, total = await service.list_documents(
+        user_id=current_user.id, skip=skip, limit=limit
+    )
     return DocumentListResponse(
         items=[DocumentResponse.model_validate(doc) for doc in documents],
         total=total,
@@ -96,8 +102,11 @@ async def list_documents(
 async def list_document_chunks(
     document_id: UUID,
     processing: DocumentProcessingService = Depends(get_processing_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentChunkListResponse:
-    chunks = await processing.get_chunks(document_id)
+    chunks = await processing.get_chunks(
+        document_id, user_id=current_user.id
+    )
     return DocumentChunkListResponse(
         document_id=document_id,
         items=[DocumentChunkResponse.from_chunk(chunk) for chunk in chunks],
@@ -113,9 +122,14 @@ async def list_document_chunks(
 async def get_document_status(
     document_id: UUID,
     processing: DocumentProcessingService = Depends(get_processing_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentStatusResponse:
-    document = await processing.get_status(document_id)
-    chunks = await processing.get_chunks(document_id)
+    document = await processing.get_status(
+        document_id, user_id=current_user.id
+    )
+    chunks = await processing.get_chunks(
+        document_id, user_id=current_user.id
+    )
     return DocumentStatusResponse(
         document_id=document.id,
         status=document.status,
@@ -138,8 +152,11 @@ async def get_document_status(
 async def get_document_progress(
     document_id: UUID,
     service: DocumentService = Depends(get_document_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentProgressResponse:
-    payload = await service.get_progress(document_id)
+    payload = await service.get_progress(
+        document_id, user_id=current_user.id
+    )
     return DocumentProgressResponse.model_validate(payload)
 
 
@@ -157,8 +174,9 @@ async def get_document_progress(
 async def reprocess_document(
     document_id: UUID,
     service: DocumentService = Depends(get_document_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentUploadResponse:
-    result = await service.reprocess(document_id)
+    result = await service.reprocess(document_id, user_id=current_user.id)
     return DocumentUploadResponse(
         document_id=result.document.id,
         task_id=result.task_id,
@@ -183,8 +201,9 @@ async def reprocess_document(
 )
 async def reindex_documents(
     indexing: IndexingService = Depends(get_indexing_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentReindexResponse:
-    payload = await indexing.reindex_all()
+    payload = await indexing.reindex_all(user_id=current_user.id)
     return DocumentReindexResponse.model_validate(payload)
 
 
@@ -200,8 +219,11 @@ async def reindex_documents(
 async def index_document(
     document_id: UUID,
     indexing: IndexingService = Depends(get_indexing_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentIndexResponse:
-    document = await indexing.index_document(document_id)
+    document = await indexing.index_document(
+        document_id, user_id=current_user.id
+    )
     return DocumentIndexResponse(
         document_id=document.id,
         index_status=document.index_status,
@@ -220,8 +242,11 @@ async def index_document(
 async def get_index_status(
     document_id: UUID,
     indexing: IndexingService = Depends(get_indexing_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentIndexStatusResponse:
-    payload = await indexing.get_index_status(document_id)
+    payload = await indexing.get_index_status(
+        document_id, user_id=current_user.id
+    )
     return DocumentIndexStatusResponse.model_validate(payload)
 
 
@@ -233,8 +258,11 @@ async def get_index_status(
 async def delete_document_index(
     document_id: UUID,
     indexing: IndexingService = Depends(get_indexing_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentIndexResponse:
-    document = await indexing.delete_index(document_id)
+    document = await indexing.delete_index(
+        document_id, user_id=current_user.id
+    )
     return DocumentIndexResponse(
         document_id=document.id,
         index_status=document.index_status,
@@ -267,8 +295,11 @@ async def get_document_file(
     document_id: UUID,
     download: bool = Query(False, description="Force an attachment download"),
     service: DocumentService = Depends(get_document_service),
+    current_user: User = Depends(get_current_user),
 ) -> FileResponse:
-    path, original_filename = await service.get_file(document_id)
+    path, original_filename = await service.get_file(
+        document_id, user_id=current_user.id
+    )
     safe_name = _safe_pdf_filename(original_filename)
     disposition = "attachment" if download else "inline"
     return FileResponse(
@@ -286,8 +317,11 @@ async def get_document_file(
 async def get_document(
     document_id: UUID,
     service: DocumentService = Depends(get_document_service),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentResponse:
-    document = await service.get_document(document_id)
+    document = await service.get_document(
+        document_id, user_id=current_user.id
+    )
     return DocumentResponse.model_validate(document)
 
 
@@ -299,5 +333,6 @@ async def get_document(
 async def delete_document(
     document_id: UUID,
     service: DocumentService = Depends(get_document_service),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    await service.delete_document(document_id)
+    await service.delete_document(document_id, user_id=current_user.id)

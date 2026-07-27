@@ -28,8 +28,10 @@ class ConversationService:
         self._settings = settings or get_settings()
         self._repo = ConversationRepository(session)
 
-    async def create_conversation(self, *, title: str | None = None) -> Conversation:
-        conversation = await self._repo.create(title=title)
+    async def create_conversation(
+        self, *, user_id: UUID, title: str | None = None
+    ) -> Conversation:
+        conversation = await self._repo.create(user_id=user_id, title=title)
         await self._session.commit()
         await self._session.refresh(conversation)
         logger.info("Conversation created id=%s", conversation.id)
@@ -39,10 +41,13 @@ class ConversationService:
         self,
         conversation_id: UUID,
         *,
+        user_id: UUID,
         with_messages: bool = True,
     ) -> Conversation:
         conversation = await self._repo.get_by_id(
-            conversation_id, with_messages=with_messages
+            conversation_id,
+            user_id=user_id,
+            with_messages=with_messages,
         )
         if conversation is None:
             raise NotFoundError(f"Conversation {conversation_id} not found")
@@ -51,15 +56,22 @@ class ConversationService:
     async def list_conversations(
         self,
         *,
+        user_id: UUID,
         skip: int = 0,
         limit: int = 100,
     ) -> tuple[list[Conversation], int]:
-        items = await self._repo.list_all(skip=skip, limit=limit)
-        total = await self._repo.count()
+        items = await self._repo.list_all(
+            user_id=user_id, skip=skip, limit=limit
+        )
+        total = await self._repo.count(user_id=user_id)
         return items, total
 
-    async def delete_conversation(self, conversation_id: UUID) -> None:
-        conversation = await self._repo.get_by_id(conversation_id)
+    async def delete_conversation(
+        self, conversation_id: UUID, *, user_id: UUID
+    ) -> None:
+        conversation = await self._repo.get_by_id(
+            conversation_id, user_id=user_id
+        )
         if conversation is None:
             raise NotFoundError(f"Conversation {conversation_id} not found")
         await self._repo.delete(conversation)
@@ -70,6 +82,7 @@ class ConversationService:
         self,
         conversation_id: UUID,
         *,
+        user_id: UUID,
         role: MessageRole | str,
         content: str,
         metadata: dict[str, Any] | None = None,
@@ -78,7 +91,9 @@ class ConversationService:
         if not cleaned:
             raise ValidationError("Message content must not be empty")
 
-        conversation = await self._repo.get_by_id(conversation_id)
+        conversation = await self._repo.get_by_id(
+            conversation_id, user_id=user_id
+        )
         if conversation is None:
             raise NotFoundError(f"Conversation {conversation_id} not found")
 
@@ -104,9 +119,12 @@ class ConversationService:
         self,
         conversation_id: UUID,
         *,
+        user_id: UUID,
         limit: int | None = None,
     ) -> list[Message]:
-        conversation = await self._repo.get_by_id(conversation_id)
+        conversation = await self._repo.get_by_id(
+            conversation_id, user_id=user_id
+        )
         if conversation is None:
             raise NotFoundError(f"Conversation {conversation_id} not found")
 
@@ -143,6 +161,7 @@ class ConversationService:
         self,
         conversation_id: UUID,
         *,
+        user_id: UUID,
         content: str,
         generator: Any,
         top_k: int | None = None,
@@ -156,11 +175,14 @@ class ConversationService:
         if not isinstance(generator, GeneratorService):
             raise ValidationError("A GeneratorService is required")
 
-        history_messages = await self.load_history(conversation_id)
+        history_messages = await self.load_history(
+            conversation_id, user_id=user_id
+        )
         history = self.messages_to_prompt_turns(history_messages)
 
         user_message = await self.append_message(
             conversation_id,
+            user_id=user_id,
             role=MessageRole.USER,
             content=content,
         )
@@ -172,6 +194,7 @@ class ConversationService:
             temperature=temperature,
             max_tokens=max_tokens,
             history=history,
+            user_id=user_id,
         )
 
         assistant_meta = {
@@ -189,6 +212,7 @@ class ConversationService:
         }
         assistant_message = await self.append_message(
             conversation_id,
+            user_id=user_id,
             role=MessageRole.ASSISTANT,
             content=result["answer"],
             metadata=assistant_meta,

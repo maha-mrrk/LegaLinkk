@@ -43,6 +43,7 @@ class ContractAnalysisService:
         self,
         question: str,
         *,
+        user_id: UUID,
         document_id: UUID | None,
         force_refresh: bool = False,
         top_k: int | None = None,
@@ -59,6 +60,7 @@ class ContractAnalysisService:
         if document_id is None:
             return await self._compute(
                 question,
+                user_id=user_id,
                 document_id=None,
                 top_k=top_k,
                 final_k=final_k,
@@ -67,7 +69,12 @@ class ContractAnalysisService:
                 history=history,
             )
 
-        if await self._documents.get_by_id(document_id) is None:
+        if (
+            await self._documents.get_by_id(
+                document_id, user_id=user_id
+            )
+            is None
+        ):
             raise NotFoundError("Ce contrat est introuvable.")
 
         fingerprint = self._fingerprint(
@@ -142,6 +149,7 @@ class ContractAnalysisService:
         try:
             payload = await self._compute(
                 question,
+                user_id=user_id,
                 document_id=document_id,
                 top_k=top_k,
                 final_k=final_k,
@@ -179,6 +187,7 @@ class ContractAnalysisService:
         self,
         question: str,
         *,
+        user_id: UUID,
         document_id: UUID | None,
         top_k: int | None,
         final_k: int | None,
@@ -188,6 +197,7 @@ class ContractAnalysisService:
     ) -> dict[str, Any]:
         return await self._legal_agent.analyze(
             question,
+            user_id=user_id,
             top_k=top_k,
             final_k=final_k,
             temperature=temperature,

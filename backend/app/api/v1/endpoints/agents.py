@@ -7,12 +7,14 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.agents.legal import LegalAgent
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.graphs.multi_agent_graph import build_multi_agent_graph
+from app.models.user import User
 from app.schemas.agents import (
     AgentAnswer,
     AgentQueryRequest,
@@ -69,6 +71,7 @@ def _to_answer(result: dict[str, Any] | None) -> AgentAnswer | None:
 async def agents_query(
     body: AgentQueryRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> AgentQueryResponse:
     settings = get_settings()
     langfuse = get_langfuse_service()
@@ -81,6 +84,7 @@ async def agents_query(
     initial: GraphState = {
         "user_query": body.question,
         "metadata": {
+            "user_id": str(current_user.id),
             "top_k": body.top_k,
             "final_k": body.final_k,
             "temperature": body.temperature,
@@ -131,6 +135,7 @@ async def agents_query(
 async def agents_stream(
     body: AgentQueryRequest,
     generator: GeneratorService = Depends(get_generator_service),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     service = AgentStreamService(generator)
 
@@ -138,6 +143,7 @@ async def agents_stream(
         try:
             async for event in service.stream(
                 body.question,
+                user_id=current_user.id,
                 document_id=body.document_id,
                 top_k=body.top_k,
                 final_k=body.final_k,
@@ -194,15 +200,19 @@ async def legal_analyze(
     legal_agent: LegalAgent = Depends(get_legal_agent),
     conversations: ConversationService = Depends(get_conversation_service),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> LegalAnalysisResponse:
     history = None
     if body.conversation_id is not None:
-        messages = await conversations.load_history(body.conversation_id)
+        messages = await conversations.load_history(
+            body.conversation_id, user_id=current_user.id
+        )
         history = ConversationService.messages_to_prompt_turns(messages)
 
     service = ContractAnalysisService(db, legal_agent)
     payload = await service.get_or_analyze(
         body.question,
+        user_id=current_user.id,
         document_id=body.document_id,
         force_refresh=body.force_refresh,
         top_k=body.top_k,

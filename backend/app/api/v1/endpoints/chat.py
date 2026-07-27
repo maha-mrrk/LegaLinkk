@@ -9,9 +9,11 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import get_db
+from app.models.user import User
 from app.graphs.rag_graph import build_rag_graph
 from app.schemas.chat import (
     ChatDocumentPdfRequest,
@@ -56,9 +58,12 @@ def get_conversation_service(
 async def create_conversation(
     body: ConversationCreateRequest | None = None,
     service: ConversationService = Depends(get_conversation_service),
+    current_user: User = Depends(get_current_user),
 ) -> ConversationResponse:
     title = body.title if body is not None else None
-    conversation = await service.create_conversation(title=title)
+    conversation = await service.create_conversation(
+        user_id=current_user.id, title=title
+    )
     return ConversationResponse.from_orm(conversation, include_messages=False)
 
 
@@ -71,8 +76,11 @@ async def list_conversations(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     service: ConversationService = Depends(get_conversation_service),
+    current_user: User = Depends(get_current_user),
 ) -> ConversationListResponse:
-    items, total = await service.list_conversations(skip=skip, limit=limit)
+    items, total = await service.list_conversations(
+        user_id=current_user.id, skip=skip, limit=limit
+    )
     return ConversationListResponse(
         items=[
             ConversationResponse.from_orm(item, include_messages=False)
@@ -90,9 +98,12 @@ async def list_conversations(
 async def get_conversation(
     conversation_id: UUID,
     service: ConversationService = Depends(get_conversation_service),
+    current_user: User = Depends(get_current_user),
 ) -> ConversationResponse:
     conversation = await service.get_conversation(
-        conversation_id, with_messages=True
+        conversation_id,
+        user_id=current_user.id,
+        with_messages=True,
     )
     return ConversationResponse.from_orm(conversation, include_messages=True)
 
@@ -105,8 +116,11 @@ async def get_conversation(
 async def delete_conversation(
     conversation_id: UUID,
     service: ConversationService = Depends(get_conversation_service),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    await service.delete_conversation(conversation_id)
+    await service.delete_conversation(
+        conversation_id, user_id=current_user.id
+    )
 
 
 @router.post(
@@ -123,9 +137,11 @@ async def post_conversation_message(
     body: ConversationMessageRequest,
     conversations: ConversationService = Depends(get_conversation_service),
     generator: GeneratorService = Depends(get_generator_service),
+    current_user: User = Depends(get_current_user),
 ) -> ConversationMessageResponse:
     payload = await conversations.send_user_message(
         conversation_id,
+        user_id=current_user.id,
         content=body.content,
         generator=generator,
         top_k=body.top_k,
@@ -158,6 +174,7 @@ async def post_conversation_message(
 async def chat_query(
     body: ChatQueryRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ChatQueryResponse:
     # Optional parent trace grouping every RAG node into one run.
     langfuse = get_langfuse_service()
@@ -176,6 +193,7 @@ async def chat_query(
         # None → search the whole library; a UUID scopes retrieval to one document.
         "document_id": str(body.document_id) if body.document_id else None,
         "metadata": {
+            "user_id": str(current_user.id),
             "top_k": body.top_k,
             "final_k": body.final_k,
             "temperature": body.temperature,
@@ -220,9 +238,11 @@ async def chat_query(
 async def chat_document(
     body: ChatQueryRequest,
     generator: GeneratorService = Depends(get_generator_service),
+    current_user: User = Depends(get_current_user),
 ) -> ChatDocumentResponse:
     result = await generator.generate_document(
         body.question,
+        user_id=current_user.id,
         top_k=body.top_k,
         final_k=body.final_k,
         temperature=body.temperature,
@@ -274,11 +294,13 @@ async def chat_document_pdf(body: ChatDocumentPdfRequest) -> Response:
 async def chat_stream(
     body: ChatQueryRequest,
     generator: GeneratorService = Depends(get_generator_service),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     async def event_source():
         try:
             async for event in generator.stream_answer(
                 body.question,
+                user_id=current_user.id,
                 top_k=body.top_k,
                 final_k=body.final_k,
                 temperature=body.temperature,

@@ -216,14 +216,22 @@ class DocumentProcessingService:
         )
         return document
 
-    async def get_chunks(self, document_id: UUID) -> list[DocumentChunk]:
-        document = await self._documents.get_by_id(document_id)
+    async def get_chunks(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> list[DocumentChunk]:
+        document = await self._documents.get_by_id(
+            document_id, user_id=user_id
+        )
         if document is None:
-            raise NotFoundError(f"Document {document_id} not found")
+            raise NotFoundError("Document introuvable")
         return await self._chunks.list_by_document_id(document_id)
 
-    async def get_status(self, document_id: UUID) -> Document:
-        document = await self._documents.get_by_id(document_id)
+    async def get_status(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> Document:
+        document = await self._documents.get_by_id(
+            document_id, user_id=user_id
+        )
         if document is None:
-            raise NotFoundError(f"Document {document_id} not found")
+            raise NotFoundError("Document introuvable")
         return document

@@ -82,6 +82,7 @@ class GeneratorService:
         self,
         question: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         final_k: int | None = None,
         temperature: float | None = None,
@@ -103,7 +104,11 @@ class GeneratorService:
         )
         started = time.perf_counter()
         ranked, candidate_k, keep_k = await self._retrieve_and_rerank(
-            cleaned, top_k=top_k, final_k=final_k, document_id=document_id
+            cleaned,
+            user_id=user_id,
+            top_k=top_k,
+            final_k=final_k,
+            document_id=document_id,
         )
 
         result = await self.generate_from_chunks(
@@ -126,6 +131,7 @@ class GeneratorService:
         self,
         question: str,
         *,
+        user_id: UUID,
         top_k: int | None,
         final_k: int | None,
         document_id: UUID | None,
@@ -157,6 +163,7 @@ class GeneratorService:
         # retrieve_hits logs: Generating query embedding... / Retrieving chunks...
         _, hits, _ = await self._retrieval.retrieve_hits(
             question,
+            user_id=user_id,
             top_k=candidate_k,
             document_id=document_id,
             log_search_as="Retrieving chunks...",
@@ -234,6 +241,7 @@ class GeneratorService:
         self,
         question: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         final_k: int | None = None,
         temperature: float | None = None,
@@ -262,7 +270,11 @@ class GeneratorService:
         started = time.perf_counter()
         no_answer = self._prompt_builder.no_answer_message
         ranked, candidate_k, keep_k = await self._retrieve_and_rerank(
-            cleaned, top_k=top_k, final_k=final_k, document_id=document_id
+            cleaned,
+            user_id=user_id,
+            top_k=top_k,
+            final_k=final_k,
+            document_id=document_id,
         )
         prompt, sources, _context_text, used_chunks = self._prepare_prompt(
             cleaned, ranked, history=history, system_prompt=system_prompt
@@ -425,6 +437,7 @@ class GeneratorService:
         self,
         question: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         final_k: int | None = None,
         temperature: float | None = None,
@@ -462,11 +475,17 @@ class GeneratorService:
         )
 
         if full_document and document_id is not None:
-            chunks = await self._retrieval.get_document_chunks(document_id)
+            chunks = await self._retrieval.get_document_chunks(
+                document_id, user_id=user_id
+            )
             budget_chars = self._settings.full_document_context_chars
         else:
             chunks, _candidate_k, _keep_k = await self._retrieve_and_rerank(
-                cleaned, top_k=top_k, final_k=final_k, document_id=document_id
+                cleaned,
+                user_id=user_id,
+                top_k=top_k,
+                final_k=final_k,
+                document_id=document_id,
             )
             budget_chars = self._settings.rag_max_context_chars
 
@@ -564,6 +583,7 @@ class GeneratorService:
         self,
         question: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         final_k: int | None = None,
         temperature: float | None = None,
@@ -620,6 +640,7 @@ class GeneratorService:
         if mode == "full-document" and document_id is not None:
             return await self._generate_full_document(
                 cleaned,
+                user_id=user_id,
                 document_id=document_id,
                 temperature=temperature,
                 history=history,
@@ -630,7 +651,11 @@ class GeneratorService:
 
         # ---- Top-K path (unchanged behaviour, shared with Q&A retrieval) -------
         ranked, candidate_k, keep_k = await self._retrieve_and_rerank(
-            cleaned, top_k=top_k, final_k=final_k, document_id=document_id
+            cleaned,
+            user_id=user_id,
+            top_k=top_k,
+            final_k=final_k,
+            document_id=document_id,
         )
         prompt, sources, _context_text, used_chunks = self._prepare_prompt(
             cleaned,
@@ -705,6 +730,7 @@ class GeneratorService:
         self,
         question: str,
         *,
+        user_id: UUID,
         document_id: UUID,
         temperature: float | None,
         history: Sequence[dict[str, str]] | None,
@@ -719,7 +745,9 @@ class GeneratorService:
         budget, or via an ordered map-reduce (per-batch findings → final report)
         when it does not.
         """
-        chunks = await self._retrieval.get_document_chunks(document_id)
+        chunks = await self._retrieval.get_document_chunks(
+            document_id, user_id=user_id
+        )
         if not chunks:
             logger.info("Full-document mode: no chunks found for document.")
             return {

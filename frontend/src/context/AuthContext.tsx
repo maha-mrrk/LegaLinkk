@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { getToken } from '@/services/api'
 import {
   fetchMe,
@@ -34,6 +35,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -48,7 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const me = await fetchMe()
         if (!cancelled) setUser(me)
       } catch {
-        if (!cancelled) setUser(null)
+        if (!cancelled) {
+          queryClient.clear()
+          setUser(null)
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -57,7 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [queryClient])
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -66,17 +71,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: Boolean(user),
       loading,
       async login(email, password) {
-        setUser(await loginRequest(email, password))
+        const nextUser = await loginRequest(email, password)
+        queryClient.clear()
+        setUser(nextUser)
       },
       async register(payload) {
-        setUser(await registerRequest(payload))
+        const nextUser = await registerRequest(payload)
+        queryClient.clear()
+        setUser(nextUser)
       },
       logout() {
         logoutRequest()
+        queryClient.clear()
         setUser(null)
       },
     }),
-    [user, loading],
+    [user, loading, queryClient],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

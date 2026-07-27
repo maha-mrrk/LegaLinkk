@@ -48,7 +48,7 @@ class DocumentService:
         )
         self._progress = get_ingestion_progress_service()
 
-    async def upload(self, file: UploadFile) -> UploadResult:
+    async def upload(self, file: UploadFile, *, user_id: UUID) -> UploadResult:
         """Validate, store, persist as uploaded, then queue background processing.
 
         The heavy pipeline (extract → OCR → clean → chunk → embed → index) runs
@@ -64,6 +64,7 @@ class DocumentService:
         saved_path = await self._storage.save(stored_filename, content)
 
         document = Document(
+            user_id=user_id,
             original_filename=original_filename,
             stored_filename=stored_filename,
             file_path=str(saved_path),
@@ -115,14 +116,18 @@ class DocumentService:
             )
             return None
 
-    async def reprocess(self, document_id: UUID) -> UploadResult:
+    async def reprocess(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> UploadResult:
         """Re-queue background processing for an existing document."""
-        document = await self.get_document(document_id)
+        document = await self.get_document(document_id, user_id=user_id)
         task_id = await self._enqueue_processing(document.id)
         return UploadResult(document=document, task_id=task_id)
 
-    async def get_progress(self, document_id: UUID) -> dict:
+    async def get_progress(self, document_id: UUID, *, user_id: UUID) -> dict:
         """Return live ingestion progress, falling back to DB-derived status."""
+        # Verify ownership before touching Redis, whose keys are document UUIDs.
+        document = await self.get_document(document_id, user_id=user_id)
         live = await self._progress.get(str(document_id))
         if live:
             progress = int(live.get("progress") or 0)
@@ -142,7 +147,6 @@ class DocumentService:
                 "timeline": live.get("timeline") or [],
             }
 
-        document = await self.get_document(document_id)
         return self._progress_from_document(document)
 
     @staticmethod
@@ -195,26 +199,32 @@ class DocumentService:
         }
 
     async def list_documents(
-        self, *, skip: int = 0, limit: int = 100
+        self, *, user_id: UUID, skip: int = 0, limit: int = 100
     ) -> tuple[list[Document], int]:
-        documents = await self._repo.list_all(skip=skip, limit=limit)
-        total = await self._repo.count()
+        documents = await self._repo.list_all(
+            user_id=user_id, skip=skip, limit=limit
+        )
+        total = await self._repo.count(user_id=user_id)
         return documents, total
 
-    async def get_document(self, document_id: UUID) -> Document:
-        document = await self._repo.get_by_id(document_id)
+    async def get_document(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> Document:
+        document = await self._repo.get_by_id(document_id, user_id=user_id)
         if document is None:
-            raise NotFoundError(f"Document {document_id} not found")
+            raise NotFoundError("Document introuvable")
         return document
 
-    async def get_file(self, document_id: UUID) -> tuple[Path, str]:
+    async def get_file(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> tuple[Path, str]:
         """Return ``(absolute_path, original_filename)`` for a document's PDF.
 
         Resolves the stored file under the storage root, falling back to the
         persisted absolute ``file_path`` for older rows. Raises ``NotFoundError``
         when the metadata or the file on disk is missing.
         """
-        document = await self.get_document(document_id)
+        document = await self.get_document(document_id, user_id=user_id)
         path = self._storage.resolve_path(document.stored_filename)
         if not path.is_file():
             fallback = Path(document.file_path)
@@ -223,8 +233,10 @@ class DocumentService:
             path = fallback
         return path, document.original_filename
 
-    async def delete_document(self, document_id: UUID) -> None:
-        document = await self.get_document(document_id)
+    async def delete_document(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> None:
+        document = await self.get_document(document_id, user_id=user_id)
         stored_filename = document.stored_filename
 
         await self._repo.delete(document)

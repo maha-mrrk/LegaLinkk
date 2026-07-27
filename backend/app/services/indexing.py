@@ -48,6 +48,7 @@ class IndexingService:
         self,
         document_id: UUID,
         *,
+        user_id: UUID | None = None,
         precomputed_embeddings: dict[int, list[float]] | None = None,
     ) -> Document:
         """Generate embeddings for all chunks and store them in PostgreSQL/pgvector.
@@ -62,9 +63,11 @@ class IndexingService:
         embedding pass. It falls back to embedding whenever the precomputed set
         does not cover every chunk.
         """
-        document = await self._documents.get_by_id(document_id)
+        document = await self._documents.get_by_id(
+            document_id, user_id=user_id
+        )
         if document is None:
-            raise NotFoundError(f"Document {document_id} not found")
+            raise NotFoundError("Document introuvable")
 
         if document.status not in {
             DocumentStatus.PROCESSED,
@@ -183,13 +186,14 @@ class IndexingService:
         texts = [chunk.text for chunk in chunks]
         return await asyncio.to_thread(self._embeddings.embed_batch, texts)
 
-    async def reindex_all(self) -> dict:
-        """Re-index every processed document (delete old embeddings, regenerate)."""
+    async def reindex_all(self, *, user_id: UUID) -> dict:
+        """Re-index every processed document owned by one user."""
         documents = await self._documents.list_by_statuses(
             [
                 DocumentStatus.PROCESSED,
                 DocumentStatus.COMPLETED,
-            ]
+            ],
+            user_id=user_id,
         )
         logger.info("Bulk reindex started documents=%s", len(documents))
 
@@ -198,7 +202,9 @@ class IndexingService:
 
         for document in documents:
             try:
-                indexed = await self.index_document(document.id)
+                indexed = await self.index_document(
+                    document.id, user_id=user_id
+                )
                 succeeded.append(indexed.id)
             except Exception:
                 failed.append(document.id)
@@ -221,10 +227,14 @@ class IndexingService:
             "message": "Reindex completed",
         }
 
-    async def get_index_status(self, document_id: UUID) -> dict:
-        document = await self._documents.get_by_id(document_id)
+    async def get_index_status(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> dict:
+        document = await self._documents.get_by_id(
+            document_id, user_id=user_id
+        )
         if document is None:
-            raise NotFoundError(f"Document {document_id} not found")
+            raise NotFoundError("Document introuvable")
 
         vector_count = await self._embeddings_repo.count_by_document_id(document_id)
         chunk_count = len(await self._chunks.list_by_document_id(document_id))
@@ -237,10 +247,14 @@ class IndexingService:
             "indexed_at": document.indexed_at,
         }
 
-    async def delete_index(self, document_id: UUID) -> Document:
-        document = await self._documents.get_by_id(document_id)
+    async def delete_index(
+        self, document_id: UUID, *, user_id: UUID
+    ) -> Document:
+        document = await self._documents.get_by_id(
+            document_id, user_id=user_id
+        )
         if document is None:
-            raise NotFoundError(f"Document {document_id} not found")
+            raise NotFoundError("Document introuvable")
 
         deleted = await self._embeddings_repo.delete_by_document_id(document_id)
         document.index_status = IndexStatus.NOT_INDEXED

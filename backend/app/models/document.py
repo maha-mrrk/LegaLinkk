@@ -5,7 +5,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, Enum, Integer, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +25,7 @@ from app.models.embedding import IndexStatus
 if TYPE_CHECKING:
     from app.models.chunk import DocumentChunk
     from app.models.embedding import DocumentEmbedding
+    from app.models.user import User
 
 
 class DocumentStatus(str, enum.Enum):
@@ -40,11 +51,19 @@ class Document(Base):
     """Persisted metadata for a locally stored PDF document."""
 
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_user_id_upload_date", "user_id", "upload_date"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
     )
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_filename: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
@@ -104,6 +123,7 @@ class Document(Base):
         back_populates="document",
         cascade="all, delete-orphan",
     )
+    user: Mapped["User"] = relationship("User", back_populates="documents")
 
     def __repr__(self) -> str:
         return (

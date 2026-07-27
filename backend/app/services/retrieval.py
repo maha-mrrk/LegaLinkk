@@ -41,6 +41,7 @@ class RetrievalService:
         self,
         query: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         document_id: UUID | None = None,
         log_search_as: str = "Searching vectors...",
@@ -67,6 +68,7 @@ class RetrievalService:
         try:
             hits = await self._repo.search_similar(
                 vector,
+                user_id=user_id,
                 top_k=k,
                 document_id=document_id,
             )
@@ -77,7 +79,7 @@ class RetrievalService:
         return cleaned, hits, k
 
     async def get_document_chunks(
-        self, document_id: UUID
+        self, document_id: UUID, *, user_id: UUID
     ) -> list[RetrievalHit]:
         """Return the ENTIRE document (all chunks, ordered by ``chunk_index``).
 
@@ -90,7 +92,9 @@ class RetrievalService:
         """
         logger.info("Loading full document chunks document_id=%s", document_id)
         try:
-            hits = await self._repo.list_all_by_document(document_id)
+            hits = await self._repo.list_all_by_document(
+                document_id, user_id=user_id
+            )
         except Exception as exc:
             logger.exception("Full-document chunk load failed")
             raise RetrievalError("Failed to load document chunks") from exc
@@ -101,12 +105,14 @@ class RetrievalService:
         self,
         query: str,
         *,
+        user_id: UUID,
         top_k: int | None = None,
         document_id: UUID | None = None,
     ) -> dict:
         """Embed ``query`` and return Top-K cosine-similar chunks."""
         cleaned, hits, k = await self.retrieve_hits(
             query,
+            user_id=user_id,
             top_k=top_k,
             document_id=document_id,
         )

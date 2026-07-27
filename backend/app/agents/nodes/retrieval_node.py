@@ -41,6 +41,7 @@ class RetrievalNode(BaseGraphAgent):
         logger.info("RetrievalNode: retrieving for question_len=%s", len(question))
         result = await self._retrieval.retrieve(
             question,
+            user_id=UUID(str(metadata["user_id"])),
             top_k=top_k,
             document_id=document_id,
         )

@@ -19,8 +19,13 @@ class ConversationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(self, *, title: str | None = None) -> Conversation:
-        conversation = Conversation(title=title)
+    async def create(
+        self,
+        *,
+        user_id: UUID,
+        title: str | None = None,
+    ) -> Conversation:
+        conversation = Conversation(user_id=user_id, title=title)
         self._session.add(conversation)
         await self._session.flush()
         await self._session.refresh(conversation)
@@ -30,26 +35,39 @@ class ConversationRepository:
         self,
         conversation_id: UUID,
         *,
+        user_id: UUID,
         with_messages: bool = False,
     ) -> Conversation | None:
-        stmt = select(Conversation).where(Conversation.id == conversation_id)
+        stmt = select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == user_id,
+        )
         if with_messages:
             stmt = stmt.options(selectinload(Conversation.messages))
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_all(self, *, skip: int = 0, limit: int = 100) -> list[Conversation]:
+    async def list_all(
+        self,
+        *,
+        user_id: UUID,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[Conversation]:
         result = await self._session.execute(
             select(Conversation)
+            .where(Conversation.user_id == user_id)
             .order_by(Conversation.updated_at.desc())
             .offset(skip)
             .limit(limit)
         )
         return list(result.scalars().all())
 
-    async def count(self) -> int:
+    async def count(self, *, user_id: UUID) -> int:
         result = await self._session.execute(
-            select(func.count()).select_from(Conversation)
+            select(func.count())
+            .select_from(Conversation)
+            .where(Conversation.user_id == user_id)
         )
         return int(result.scalar_one())
 
