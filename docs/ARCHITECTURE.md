@@ -127,11 +127,11 @@ backend/
    ├─ services/              # business logic (single source of truth)
    │  └─ llm/                # LLM provider abstraction + OpenAI-compatible client
    ├─ agents/                # TWO layers (see §6):
-   │  ├─ base.py             # BaseAgent (multi-agent orchestration)
    │  ├─ base_agent.py       # BaseGraphAgent (LangGraph node contract)
-   │  ├─ orchestrator.py, intent.py, legal.py, risk.py, placeholder.py
-   │  └─ nodes/              # 9 LangGraph node wrappers
-   ├─ graphs/                # LangGraph StateGraph builders (ingestion, rag) + placeholder graph_builder
+   │  ├─ base.py             # BaseAgent (legacy; used only by LegalAgent)
+   │  ├─ legal.py, risk.py, intent.py (DOMAIN_KEYWORDS)
+   │  └─ nodes/              # 14 LangGraph node wrappers (ingestion/RAG + multi-agent)
+   ├─ graphs/                # LangGraph StateGraph builders (ingestion, rag, multi_agent) + placeholder graph_builder
    ├─ state/                 # GraphState TypedDict
    ├─ tools/                 # ⚠ placeholder BaseTool (no concrete tools)
    ├─ tasks/                 # Celery tasks (ingestion)
@@ -441,22 +441,26 @@ fewer embedding pass).
 
 | Layer | Base class | State object | Where used |
 |---|---|---|---|
-| Multi-agent orchestration | `agents/base.py` `BaseAgent` | `AgentContext` / `AgentResult` | `/agents/*` |
-| LangGraph nodes | `agents/base_agent.py` `BaseGraphAgent` | `state/graph_state.py` `GraphState` | ingestion + rag graphs |
+| LangGraph nodes | `agents/base_agent.py` `BaseGraphAgent` | `state/graph_state.py` `GraphState` | ingestion + rag + **multi-agent** graphs |
+| Legacy agent interface | `agents/base.py` `BaseAgent` | `AgentContext` / `AgentResult` | `LegalAgent` only (`/agents/legal/analyze`) |
 
 - **`BaseGraphAgent`** — abstract: `name`, `description`, `async execute(state) -> GraphState`.
-  All 9 nodes implement it.
-- **`GraphState`** (`TypedDict, total=False`): `document_id, filename, extracted_text,
-  cleaned_text, chunks, embeddings, retrieved_chunks, reranked_chunks, user_question,
-  llm_response, metadata, errors`. Actively used (its "future" docstring is **stale**).
+  All 14 nodes implement it (9 ingestion/RAG + 5 multi-agent).
+- **`GraphState`** (`TypedDict, total=False`): the ingestion/RAG fields (`document_id, filename,
+  extracted_text, cleaned_text, chunks, embeddings, retrieved_chunks, reranked_chunks,
+  user_question, llm_response`) **plus** the multi-agent fields (`user_query, target_agent,
+  legal_result, finance_result, compliance_result, final_recommendation`) and the cross-cutting
+  `metadata, errors`.
 - **`GraphBuilder`** (`graphs/graph_builder.py`) — ✗ **placeholder**:
   `add_node/add_edge/set_entry_point` fluent stubs; `build()` raises `NotImplementedError`;
   **zero runtime callers**. Real graphs use LangGraph's native `StateGraph` directly — the name
   is misleading.
 
 **Nodes** (`agents/nodes/`, all thin wrappers over services): `ParserNode, OCRNode, CleaningNode,
-ChunkingNode, EmbeddingNode, IndexingNode` (ingestion) and `RetrievalNode, RerankerNode,
-GeneratorNode` (RAG). Shared helpers in `_state_utils.py`.
+ChunkingNode, EmbeddingNode, IndexingNode` (ingestion), `RetrievalNode, RerankerNode,
+GeneratorNode` (RAG) and `CommandParserNode, LegalNode, FinanceNode, ComplianceNode, SynthesisNode`
+(multi-agent; shared skeleton in `_agent_node.py`, specialized prompts in `agent_prompts.py`).
+Shared state helpers in `_state_utils.py`.
 
 **Current graphs**
 
@@ -464,8 +468,9 @@ GeneratorNode` (RAG). Shared helpers in `_state_utils.py`.
 |---|---|---|---|---|
 | Ingestion | `build_ingestion_graph` | `parser → {ocr\|cleaning} → cleaning → chunking → embedding → persist → {indexing\|END}` | `DocumentProcessingService.process_document` (via Celery) | ✓ **Production** |
 | RAG | `build_rag_graph` | `embedding → retrieval → reranker → generator → END` | **only** `POST /chat/query` | ⚠ Partially used |
+| Multi-agent | `build_multi_agent_graph` | `command_parser → {legal\|finance\|compliance → END}` (single) or `legal → finance → compliance → synthesis → END` (default) | `POST /agents/query` (Consultation slash commands) | ✓ **Production** |
 
-- Both graphs share a **transient-only** retry policy (`app/graphs/retry.py::transient_retry_policy`,
+- All three graphs share a **transient-only** retry policy (`app/graphs/retry.py::transient_retry_policy`,
   3 attempts). It retries only recoverable failures (timeouts, 429, 5xx, `AppError.retryable`,
   network blips) and fails fast on permanent errors (validation, not-found, auth/config) so retries
   are never wasted. Falls back to attempt-count-only on older LangGraph versions.
@@ -474,15 +479,31 @@ GeneratorNode` (RAG). Shared helpers in `_state_utils.py`.
   tolerated (document stays *processed*); optional `on_stage` callback publishes progress to Redis.
 - RAG graph's `EmbeddingNode` is a structural no-op for queries (query embedding happens inside
   `RetrievalService`).
-- **Observability bridge:** `LangfuseService.trace_node()` wraps every node in both graphs (no-op
-  unless `LANGFUSE_ENABLED`).
+- **Multi-agent graph** — `CommandParserNode` reads a leading `/legal|/finance|/compliance` command
+  (case-insensitive) into `target_agent`. Conditional edges (`route_after_command`,
+  `route_after_{legal,finance,compliance}`) route a targeted command straight to that one agent node
+  → `END`, or, with no command, chain the three agent nodes **sequentially** into `SynthesisNode`.
+  The chain is sequential (not a parallel fan-out) **by design**: a request carries a single
+  `AsyncSession` and SQLAlchemy sessions are not concurrency-safe, and each agent hits the DB via
+  retrieval. Agent nodes degrade gracefully (a failed agent records an error result instead of
+  killing the run); the shared retry policy still covers transient failures. `LegalNode`/`FinanceNode`/
+  `ComplianceNode` share one injected `GeneratorService` (reusing the RAG pipeline with a specialized
+  system prompt each); `SynthesisNode` reuses the existing LLM provider to cross-reference the three
+  analyses into `final_recommendation` (it never re-runs retrieval and adds no new facts).
+- **Observability bridge:** `LangfuseService.trace_node()` wraps every node in all three graphs
+  (no-op unless `LANGFUSE_ENABLED`).
 
 **How LangGraph integrates with services:** nodes hold injected services and delegate; graphs are
 built per-request/per-task from the `AsyncSession`. **No business logic lives in nodes/graphs.**
 
-⚠ **Not integrated:** the multi-agent orchestrator does **not** use LangGraph; the primary chat UI
-uses `/chat/stream` which bypasses the RAG graph entirely (calls `GeneratorService.stream_answer`
-directly).
+⚠ **Not integrated:** the primary chat UI uses `/chat/stream` which bypasses the RAG graph entirely
+(calls `GeneratorService.stream_answer` directly). The multi-agent graph powers the blocking
+`POST /agents/query`. The Consultation page invokes agents via **slash commands** (`/legal`,
+`/finance`, `/compliance`, and a `/synthese` menu entry) but over the **streaming** endpoint
+`POST /agents/stream` (`AgentStreamService`) so agent answers are fragmented like the normal chat —
+single-agent commands stream `GeneratorService.stream_answer` with the specialized prompt, and
+`/synthese` runs the three agents then streams the synthesis. `/agents/query` remains the blocking
+JSON equivalent. Plain messages (no slash) still use `/chat/stream`.
 
 ---
 
@@ -497,9 +518,11 @@ directly).
 | **LLM provider layer** | `BaseLLMProvider` (shared OpenAI-compatible HTTP + bounded exponential-backoff retries on transient errors + granular httpx timeout connect 15s/read 300s + SSE parsing + professional error mapping). Concrete subclasses `OpenAIProvider`, `GroqProvider`, `NvidiaProvider`, `OpenRouterProvider` (in `services/llm/providers.py`) only set defaults/headers. `OpenAICompatibleProvider` retained as a thin alias for backward compatibility | HTTP `/chat/completions` |
 | **Provider factory** | `get_llm_provider` — env-driven registry (`services/llm/factory.py`). `LLM_PROVIDER` selects the provider; the API key resolves from a provider-specific env var (`OPENAI_API_KEY`/`GROQ_API_KEY`/`NVIDIA_API_KEY`/`OPENROUTER_API_KEY`) then falls back to generic `LLM_API_KEY`. Adding a provider = one registry entry | — |
 | **Conversation memory** | `ConversationService` — persists messages; `load_history` (limit `CONVERSATION_HISTORY_LIMIT=10`) injected into prompt (history loaded *before* current turn) | Feeds `GeneratorService.answer_question(history=...)` |
-| **Multi-Agent Orchestrator** | `AgentOrchestrator` + `IntentRouter` (keyword rules) — selects `LegalAgent`/`FinanceAgent`/`ComplianceAgent`, shares one `GeneratorService`/RAG result | `POST /agents/query` (⚠ not called by frontend) |
-| **LegalAgent** | `LegalAgent.analyze` — `GeneratorService.answer_question(system_prompt=LEGAL_SYSTEM_PROMPT, document_id, history)` + `RuleBasedRiskClassifier` (rule-based risk level/findings/missing info/recommendations) | `POST /agents/legal/analyze` (used by Analysis page) |
-| **Finance/Compliance agents** | ✗ `placeholder.py` — generic RAG passthrough, `status="placeholder"` | Selected by intent only |
+| **Multi-Agent graph** | `build_multi_agent_graph` (LangGraph `StateGraph`) — `CommandParserNode` routes a `/legal\|/finance\|/compliance` command to a single agent node, else chains `LegalNode → FinanceNode → ComplianceNode → SynthesisNode`. Real graph nodes + conditional edges (no external Python dispatch) | Blocking `POST /agents/query` |
+| **Multi-Agent streaming** | `AgentStreamService` (`services/agent_stream.py`) — SSE counterpart used by the Consultation slash commands. Reuses the **same** specialized prompts + `GeneratorService` (single agent → `stream_answer`; `/synthese` → three `answer_question` calls then a streamed synthesis via the LLM provider). Emits `agent`/`status`/`analyses`/`sources`/`delta`/`done` | `POST /agents/stream` — Consultation **slash commands** (fragmented) |
+| **Legal/Finance/Compliance nodes** | `LegalNode`/`FinanceNode`/`ComplianceNode` (`agents/nodes/`, share `DomainAgentNode`) — each reuses the injected `GeneratorService` RAG pipeline with a specialized system prompt (`LEGAL_SYSTEM_PROMPT`, `FINANCE_SYSTEM_PROMPT`, `COMPLIANCE_SYSTEM_PROMPT`); write `{legal,finance,compliance}_result` on the state | Multi-agent graph nodes |
+| **SynthesisNode** | `agents/nodes/synthesis_node.py` — reads the three result fields and calls the LLM provider with `SYNTHESIS_SYSTEM_PROMPT` to weigh/cross-reference them into `final_recommendation` (no retrieval, no new facts) | Multi-agent graph fan-in |
+| **LegalAgent** | `LegalAgent.analyze` — `GeneratorService.analyze_contract` (structured JSON: summary/risk/critical points/missing info/recommendations, full-document grounded) with `RuleBasedRiskClassifier` fallback | `POST /agents/legal/analyze` (used by Analysis page) |
 
 ```mermaid
 flowchart LR
@@ -509,13 +532,16 @@ flowchart LR
   RRK --> GEN[GeneratorService]
   GEN --> LLMP[LLM provider]
   CONV[ConversationService history] --> GEN
-  subgraph Agents
-    ORCH[AgentOrchestrator] --> IR[IntentRouter]
-    ORCH --> LEG[LegalAgent] --> RISK[RuleBasedRiskClassifier]
-    ORCH --> FIN[FinanceAgent ✗]
-    ORCH --> COM[ComplianceAgent ✗]
+  subgraph MA[Multi-agent StateGraph]
+    CP[CommandParserNode] -->|/legal| LEG[LegalNode]
+    CP -->|/finance| FIN[FinanceNode]
+    CP -->|/compliance| COM[ComplianceNode]
+    CP -->|default| LEG --> FIN --> COM --> SYN[SynthesisNode]
   end
   LEG --> GEN
+  FIN --> GEN
+  COM --> GEN
+  SYN --> LLMP
 ```
 
 ---
@@ -574,7 +600,8 @@ Base prefix: `/api/v1`. All `documents`, `retrieval`, `chat`, `agents` routers r
 ### Agents (protected)
 | Method / URL | Request | Response | Service | DB |
 |---|---|---|---|---|
-| POST `/agents/query` | `AgentQueryRequest` | `AgentQueryResponse{selected_agents, intent, responses[]}` | `AgentOrchestrator.query` | pgvector; LLM |
+| POST `/agents/query` | `AgentQueryRequest{question, document_id?, top_k?, final_k?, temperature?, max_tokens?}` | `AgentQueryResponse` — either `{mode:"single", agent, response}` (a `/legal\|/finance\|/compliance` command) or `{mode:"multi", recommendation, legal, finance, compliance}` (default) | `build_multi_agent_graph` → nodes | pgvector; LLM |
+| POST `/agents/stream` | same `AgentQueryRequest` | **SSE** stream — `agent` (once), then single-agent `sources`+`delta`*+`done`, or multi `status`*+`analyses`+`delta`* (streamed synthesis)+`done`; `error` on failure | `AgentStreamService` (reuses `GeneratorService.stream_answer` / `answer_question` + LLM provider; same specialized prompts) | pgvector; LLM |
 | POST `/agents/legal/analyze` | `LegalAnalyzeRequest{question, document_id?, conversation_id?, ...}` | `LegalAnalysisResponse{analysis, risk_level, missing_information[], sources[], recommendations[], metadata}` | `LegalAgent.analyze` (+history) | pgvector; LLM |
 
 **Typical flow example (`/chat/stream`):** endpoint → `GeneratorService.stream_answer` →
@@ -746,21 +773,31 @@ sequenceDiagram
   RS-->>API: RetrieveResponse
 ```
 
-**Multi-agent request**
+**Multi-agent request** (default mode, no `/command`)
 ```mermaid
 sequenceDiagram
   participant API as POST /agents/query
-  participant O as AgentOrchestrator
-  participant IR as IntentRouter
-  participant A as Selected agents
+  participant G as multi_agent StateGraph
+  participant CP as CommandParserNode
+  participant L as LegalNode
+  participant F as FinanceNode
+  participant C as ComplianceNode
+  participant S as SynthesisNode
   participant GEN as GeneratorService
-  API->>O: query(question)
-  O->>IR: detect(question) → domains
-  O->>A: execute(query, shared context)
-  A->>GEN: answer_question (shared RAG result reused)
-  A-->>O: AgentResult[]
-  O-->>API: {selected_agents, intent, responses[]}
+  API->>G: ainvoke({user_query})
+  G->>CP: parse command → target_agent=None
+  G->>L: execute → legal_result
+  L->>GEN: answer_question(system_prompt=LEGAL)
+  G->>F: execute → finance_result
+  F->>GEN: answer_question(system_prompt=FINANCE)
+  G->>C: execute → compliance_result
+  C->>GEN: answer_question(system_prompt=COMPLIANCE)
+  G->>S: execute(3 results) → final_recommendation (LLM)
+  G-->>API: {mode:"multi", recommendation, legal, finance, compliance}
 ```
+
+With a `/legal` (or `/finance`/`/compliance`) prefix, `CommandParserNode` sets `target_agent` and the
+conditional edges route straight to that single node → `END`, returning `{mode:"single", agent, response}`.
 
 ---
 
@@ -823,7 +860,6 @@ React component polls.
 - `graphs/graph_builder.py` `GraphBuilder.build()` raises `NotImplementedError`; unused
   (misleading name).
 - `tools/` + `BaseTool` — contract only, no concrete tools.
-- `FinanceAgent`, `ComplianceAgent` — generic RAG passthroughs (`status="placeholder"`).
 - Frontend `Supervision.tsx`, `AgentDetail.tsx` — exist but **not routed**; unused chart
   components (`MonthlyBarChart`, `CategoryDonut`, `StatSparkline`) and most of `mock.ts`.
 
@@ -831,11 +867,11 @@ React component polls.
 - Chat exists in **three** paths (`/chat/query` via RAG graph, `/chat/stream` direct, conversation
   messages) — the RAG **graph** is only used by `/chat/query`; the UI uses `/chat/stream`
   (bypasses LangGraph).
-- Multi-agent orchestrator (`/agents/query`) is implemented but **not called by the frontend**.
-- `LegalAgent.execute()` (orchestrator path) does **not** forward `document_id` (the direct
-  `/agents/legal/analyze` path does).
-- `IntentRouter` uses word-boundary matching while agents' `can_handle` use substring matching
-  (inconsistent).
+- Multi-agent graph (`/agents/query`) is a real LangGraph `StateGraph` (Legal/Finance/Compliance/
+  Synthesis nodes), wired into the Consultation page via **slash commands** (`/legal`, `/finance`,
+  `/compliance`, `/synthese`). Plain messages still use the streaming RAG path.
+- Multi-agent agents run **sequentially** (not parallel) because the request's single `AsyncSession`
+  is not concurrency-safe; true parallelism would need per-agent sessions.
 - RAG-graph `EmbeddingNode` is a structural no-op for queries.
 - Frontend `DocumentItem.score`/`type`/`agents` are **hardcoded placeholders** in `documents.ts`
   (not real backend fields); Analysis `ScoreGauge` maps risk→score heuristically.
@@ -853,7 +889,10 @@ React component polls.
   (no code changes). Bounded retries on transient errors.
 - ✓ Enterprise error handling: consistent `{detail, code, retryable}` envelope; validation and
   catch-all handlers; no stack traces/technical terms exposed to users.
-- ✓ LangGraph: shared transient-only retry policy across both graphs.
+- ✓ LangGraph: shared transient-only retry policy across all three graphs.
+- ✓ Multi-agent orchestration migrated from the hand-rolled `AgentOrchestrator`/`IntentRouter` to a
+  real LangGraph `StateGraph` (`build_multi_agent_graph`): Legal/Finance/Compliance/Synthesis are
+  graph nodes with conditional `/command` routing; `orchestrator.py` + `placeholder.py` removed.
 
 **Technical debt**
 - **No user ownership:** `documents`/`conversations` have no FK to `users`; every authenticated
@@ -875,20 +914,22 @@ React component polls.
 - Digital parse (PyMuPDF) + conditional PaddleOCR (isolated subprocess).
 - Cleaning, semantic chunking, embeddings (bge-m3), pgvector storage + HNSW.
 - Retrieval (cosine Top-K), CrossEncoder reranking, grounded generation (+ streaming SSE).
-- Conversation persistence + memory; LegalAgent + rule-based risk; Langfuse tracing (optional).
-- LangGraph ingestion (production) and RAG graph; React SPA (dashboard, documents, chat, analysis,
+- Conversation persistence + memory; LegalAgent + structured/rule-based risk; Langfuse tracing.
+- LangGraph ingestion (production), RAG graph, and **multi-agent graph** (Legal/Finance/Compliance/
+  Synthesis nodes with `/command` routing); React SPA (dashboard, documents, chat, analysis,
   history, settings).
 
 **⚠ Partially implemented**
-- Multi-agent orchestrator (backend only, unused by UI); Finance/Compliance placeholders.
+- Multi-agent graph (`/agents/query`) is real LangGraph, wired into Consultation via slash commands;
+  agents run sequentially (single-session constraint).
 - RAG graph used only by `/chat/query`; UI uses direct streaming.
 - Conversation UI (backend ready, frontend uses ephemeral chat).
 - Generic `GraphBuilder` (stub).
 
 **✗ Not implemented**
 - Per-user data ownership / multi-tenancy (documents ↔ users FK, per-user filtering).
-- Concrete LangGraph tools; agent-as-graph integration.
-- Streaming for conversations/agents endpoints.
+- Concrete LangGraph tools.
+- Streaming for conversations/agents endpoints; true parallel multi-agent (per-agent sessions).
 - Profile update, Supervision/AgentDetail pages, analytics charts wired to real data.
 
 **Recommended next steps (logical order):**
@@ -896,8 +937,8 @@ React component polls.
    everything else).
 2. **Unify chat** — persist streamed answers into conversations; make the UI use conversation
    endpoints; consider streaming conversation/agent responses.
-3. **Wire the multi-agent orchestrator into the UI** (Analysis/Consultation), and promote
-   Finance/Compliance from placeholders.
+3. **Multi-agent UI** — done for Consultation (slash commands + synthesis with the 3 detailed
+   analyses). Remaining: surface it on the Analysis page too if useful.
 4. **Harden production config** — real `JWT_SECRET`, scoped CORS, secrets management.
 5. **Finish/trim frontend** — route or delete Supervision/AgentDetail, wire charts to real
    metrics, remove dead mock/`askQuestion`.
@@ -946,6 +987,7 @@ flowchart TB
   subgraph LG[LangGraph]
     IG[ingestion StateGraph]
     RG[rag StateGraph]
+    MAG[multi_agent StateGraph]
     ST[GraphState]
     GBx[GraphBuilder x stub]
   end
@@ -953,12 +995,11 @@ flowchart TB
   subgraph ND[Nodes - BaseGraphAgent]
     N1[Parser/OCR/Cleaning/Chunking/Embedding/Indexing]
     N2[Retrieval/Reranker/Generator]
+    N3[CommandParser/Legal/Finance/Compliance/Synthesis]
   end
 
-  subgraph AG[Multi-Agent - BaseAgent]
-    ORCH[AgentOrchestrator + IntentRouter]
+  subgraph AG[Legacy agent - BaseAgent]
     LEG[LegalAgent + RiskClassifier]
-    PLH[Finance/Compliance x]
   end
 
   subgraph AI[Models / External]
@@ -981,19 +1022,25 @@ flowchart TB
   DOC -- enqueue --> REDIS --> CELERY --> DPS --> IG
   IG --> ND
   RG --> ND
+  MAG --> ND
   ND --> SVC
   IG -. traces .-> LF
   RG -. traces .-> LF
+  MAG -. traces .-> LF
   DPS -- progress --> PROG --> REDIS
   RT --> AG
+  RT -- /agents/query --> MAG
   AG --> GEN
   N2 --> GEN
+  N3 --> GEN
   GEN --> RETS --> RR --> PG
   GEN --> RER --> RKM
   RETS --> EMB
   IDX --> EMB
   CELERY --> OCRE
+  N3 -- synthesis --> LLM
   GEN -- HTTP --> LLM
   ST -.shared.- IG
   ST -.shared.- RG
+  ST -.shared.- MAG
 ```

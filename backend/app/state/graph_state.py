@@ -12,7 +12,10 @@ the fields it needs and writes back only the fields it produces.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
+
+# Which specialized agent a "/command" targets; ``None`` means run them all.
+TargetAgent = Literal["legal", "finance", "compliance"]
 
 
 class GraphState(TypedDict, total=False):
@@ -39,6 +42,17 @@ class GraphState(TypedDict, total=False):
     # --- Question answering -------------------------------------------------
     user_question: str | None
     llm_response: str | None
+
+    # --- Multi-agent orchestration (multi_agent_graph) ----------------------
+    # ``user_query`` is the (command-stripped) question the specialized agents
+    # answer; ``target_agent`` is set by CommandParserNode from a leading
+    # ``/legal`` | ``/finance`` | ``/compliance`` prefix (``None`` → run all 3).
+    user_query: str | None
+    target_agent: TargetAgent | None
+    legal_result: dict[str, Any] | None
+    finance_result: dict[str, Any] | None
+    compliance_result: dict[str, Any] | None
+    final_recommendation: str | None
 
     # --- Cross-cutting ------------------------------------------------------
     metadata: dict[str, Any]

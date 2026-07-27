@@ -153,6 +153,40 @@ export interface ChatMessageSource {
   documentId?: string
 }
 
+export type AgentDomain = 'legal' | 'finance' | 'compliance'
+
+/** One specialized agent's answer returned by `POST /agents/query`. */
+export interface AgentAnswer {
+  agent: string
+  domain?: string | null
+  status: string
+  answer?: string | null
+  sources: ChatSourceRef[]
+  metadata?: Record<string, unknown>
+  message?: string | null
+}
+
+/** Result of `POST /agents/query` (single-agent or multi-agent synthesis). */
+export interface AgentQueryResult {
+  question: string
+  mode: 'single' | 'multi'
+  agent?: string | null
+  response?: AgentAnswer | null
+  recommendation?: string | null
+  legal?: AgentAnswer | null
+  finance?: AgentAnswer | null
+  compliance?: AgentAnswer | null
+}
+
+/** An individual agent analysis attached to a chat message (multi-agent mode). */
+export interface ChatAgentAnalysis {
+  domain: string
+  label: string
+  status: string
+  answer: string
+  sources?: ChatMessageSource[]
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -163,6 +197,10 @@ export interface ChatMessage {
   elapsed?: number
   /** When set, this assistant message is a generated HTML document. */
   document?: string
+  /** Single-agent mode: a badge label (e.g. "Agent Juridique"). */
+  agentLabel?: string
+  /** Multi-agent mode: the 3 individual analyses behind the synthesis. */
+  agentAnalyses?: ChatAgentAnalysis[]
 }
 
 export interface CriticalPoint {

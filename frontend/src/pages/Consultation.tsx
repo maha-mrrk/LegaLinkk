@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  ChevronDown,
+  Coins,
   Download,
   FileText,
+  Gavel,
+  Layers,
   Library,
   Loader2,
   MessageSquare,
@@ -9,9 +13,11 @@ import {
   Plus,
   Printer,
   Send,
+  ShieldCheck,
   Sparkles,
   Trash2,
   User,
+  type LucideIcon,
 } from 'lucide-react'
 import { Logo } from '@/components/Logo'
 import { MarkdownText } from '@/components/MarkdownText'
@@ -27,10 +33,17 @@ import {
   streamQuestion,
   wantsDocument,
 } from '@/services/chat'
+import { streamAgents, type StreamAgentAnalysis } from '@/services/agents'
 import { fetchDocumentBlob } from '@/services/documents'
 import { useConversations } from '@/hooks/useConversations'
 import { cn } from '@/lib/cn'
-import type { ChatMessage, ChatMessageSource, ChatSourceRef } from '@/types'
+import type {
+  AgentDomain,
+  ChatAgentAnalysis,
+  ChatMessage,
+  ChatMessageSource,
+  ChatSourceRef,
+} from '@/types'
 
 /** Open a source document's PDF in a new tab (authenticated blob fetch). */
 async function openDocument(documentId: string): Promise<void> {
@@ -51,6 +64,103 @@ function toMessageSources(refs: ChatSourceRef[]): ChatMessageSource[] {
     out.push({ filename, documentId: ref.document_id })
   }
   return out
+}
+
+/** Per-domain presentation (label + icon + soft badge colors). */
+const DOMAIN_STYLE: Record<
+  AgentDomain,
+  { label: string; icon: LucideIcon; badge: string }
+> = {
+  legal: {
+    label: 'Agent Juridique',
+    icon: Gavel,
+    badge: 'bg-primary-soft text-primary',
+  },
+  finance: {
+    label: 'Agent Financier',
+    icon: Coins,
+    badge: 'bg-warning-soft text-warning',
+  },
+  compliance: {
+    label: 'Agent Conformité',
+    icon: ShieldCheck,
+    badge: 'bg-success-soft text-success',
+  },
+}
+
+interface SlashCommand {
+  key: string
+  command: string
+  label: string
+  desc: string
+  icon: LucideIcon
+}
+
+/** The four slash options shown when the user types "/" in the composer. */
+const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    key: 'legal',
+    command: '/legal',
+    label: 'Agent Juridique',
+    desc: 'Clauses, obligations et risques contractuels',
+    icon: Gavel,
+  },
+  {
+    key: 'finance',
+    command: '/finance',
+    label: 'Agent Financier',
+    desc: 'Paiements, pénalités, coûts et exposition',
+    icon: Coins,
+  },
+  {
+    key: 'compliance',
+    command: '/compliance',
+    label: 'Agent Conformité',
+    desc: 'RGPD, réglementation, audit et conformité',
+    icon: ShieldCheck,
+  },
+  {
+    key: 'synthese',
+    command: '/synthese',
+    label: 'Synthèse des 3 agents',
+    desc: 'Analyse croisée et recommandation globale',
+    icon: Layers,
+  },
+]
+
+type AgentCommand =
+  | { mode: 'single'; domain: AgentDomain; label: string; toSend: string }
+  | { mode: 'multi'; label: string; toSend: string }
+
+/**
+ * Parse a leading slash command from the composer text.
+ * - `/legal|/finance|/compliance …` → single agent (prefix kept so the backend
+ *   routes it).
+ * - `/synthese|/synth|/tous|/all …` → multi-agent synthesis (prefix stripped so
+ *   the backend runs all three + synthesis).
+ * Returns `null` for a normal message (handled by the streaming chat).
+ */
+function parseAgentCommand(text: string): AgentCommand | null {
+  const match = /^\/([\p{L}]+)\b([\s\S]*)$/u.exec(text.trim())
+  if (!match) return null
+  const cmd = match[1].toLowerCase()
+  const rest = match[2].trim()
+  if (cmd === 'legal' || cmd === 'finance' || cmd === 'compliance') {
+    return {
+      mode: 'single',
+      domain: cmd,
+      label: DOMAIN_STYLE[cmd].label,
+      toSend: rest ? `/${cmd} ${rest}` : `/${cmd}`,
+    }
+  }
+  if (['synthese', 'synthèse', 'synth', 'tous', 'all'].includes(cmd)) {
+    return {
+      mode: 'multi',
+      label: 'Synthèse des 3 agents',
+      toSend: rest || 'Analyse ce contrat en détail.',
+    }
+  }
+  return null
 }
 
 /** Open the generated HTML in a new tab and trigger the browser print → PDF. */
@@ -236,16 +346,13 @@ function Avatar({ role }: { role: ChatMessage['role'] }) {
   )
 }
 
-function MessageRow({
-  message,
-  streaming = false,
-  liveSeconds,
+function SourceChips({
+  sources,
+  isUser = false,
 }: {
-  message: ChatMessage
-  streaming?: boolean
-  liveSeconds?: number
+  sources: ChatMessageSource[]
+  isUser?: boolean
 }) {
-  const isUser = message.role === 'user'
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openError, setOpenError] = useState(false)
 
@@ -260,6 +367,108 @@ function MessageRow({
       setOpeningId(null)
     }
   }
+
+  if (!sources.length) return null
+
+  return (
+    <>
+      <div
+        className={cn(
+          'mt-2.5 flex flex-wrap gap-1.5 border-t pt-2',
+          isUser ? 'border-white/20' : 'border-black/10',
+        )}
+      >
+        {sources.map((src) => (
+          <button
+            key={src.filename}
+            type="button"
+            onClick={() => src.documentId && handleOpenSource(src.documentId)}
+            disabled={!src.documentId || openingId === src.documentId}
+            title={
+              src.documentId
+                ? 'Ouvrir le document (PDF)'
+                : 'Document indisponible'
+            }
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition',
+              isUser
+                ? 'bg-white/15 text-white hover:bg-white/25'
+                : 'bg-primary-soft text-primary hover:bg-primary/15',
+              src.documentId ? 'cursor-pointer' : 'cursor-default opacity-70',
+            )}
+          >
+            {openingId === src.documentId ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <FileText className="size-3" />
+            )}
+            {src.filename}
+          </button>
+        ))}
+      </div>
+      {openError ? (
+        <p className="mt-1.5 text-[11px] text-danger">
+          Impossible d’ouvrir le document.
+        </p>
+      ) : null}
+    </>
+  )
+}
+
+/** Collapsible per-agent analyses shown under a multi-agent synthesis. */
+function AgentAnalysisList({ analyses }: { analyses: ChatAgentAnalysis[] }) {
+  if (!analyses.length) return null
+  return (
+    <div className="mt-3 space-y-2 border-t border-black/10 pt-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        Analyses détaillées des agents
+      </p>
+      {analyses.map((analysis) => {
+        const style = DOMAIN_STYLE[analysis.domain as AgentDomain]
+        const Icon = style?.icon ?? Sparkles
+        return (
+          <details
+            key={analysis.domain || analysis.label}
+            className="group rounded-xl border border-border bg-slate-50/70"
+          >
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                  style?.badge ?? 'bg-slate-200 text-slate-600',
+                )}
+              >
+                <Icon className="size-3" />
+                {analysis.label}
+              </span>
+              {analysis.status !== 'ok' ? (
+                <span className="text-[10px] font-medium text-danger">
+                  indisponible
+                </span>
+              ) : null}
+              <ChevronDown className="ml-auto size-4 text-slate-400 transition group-open:rotate-180" />
+            </summary>
+            <div className="border-t border-border px-3 py-2.5 text-sm text-slate-700">
+              <MarkdownText content={analysis.answer} />
+              <SourceChips sources={analysis.sources ?? []} />
+            </div>
+          </details>
+        )
+      })}
+    </div>
+  )
+}
+
+function MessageRow({
+  message,
+  streaming = false,
+  liveSeconds,
+}: {
+  message: ChatMessage
+  streaming?: boolean
+  liveSeconds?: number
+}) {
+  const isUser = message.role === 'user'
 
   return (
     <div
@@ -284,6 +493,12 @@ function MessageRow({
             </p>
           ) : (
             <div className="text-sm">
+              {message.agentLabel ? (
+                <div className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-primary-soft px-2 py-0.5 text-[11px] font-semibold text-primary">
+                  <Sparkles className="size-3" />
+                  {message.agentLabel}
+                </div>
+              ) : null}
               <MarkdownText content={message.content} />
               {streaming ? (
                 <span className="ml-0.5 inline-block h-3.5 w-[3px] translate-y-0.5 animate-pulse rounded-sm bg-brand align-middle" />
@@ -291,51 +506,10 @@ function MessageRow({
             </div>
           )}
           {message.document ? <DocumentCard html={message.document} /> : null}
-          {message.sources?.length ? (
-            <div
-              className={cn(
-                'mt-2.5 flex flex-wrap gap-1.5 border-t pt-2',
-                isUser ? 'border-white/20' : 'border-black/10',
-              )}
-            >
-              {message.sources.map((src) => (
-                <button
-                  key={src.filename}
-                  type="button"
-                  onClick={() =>
-                    src.documentId && handleOpenSource(src.documentId)
-                  }
-                  disabled={!src.documentId || openingId === src.documentId}
-                  title={
-                    src.documentId
-                      ? 'Ouvrir le document (PDF)'
-                      : 'Document indisponible'
-                  }
-                  className={cn(
-                    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition',
-                    isUser
-                      ? 'bg-white/15 text-white hover:bg-white/25'
-                      : 'bg-primary-soft text-primary hover:bg-primary/15',
-                    src.documentId
-                      ? 'cursor-pointer'
-                      : 'cursor-default opacity-70',
-                  )}
-                >
-                  {openingId === src.documentId ? (
-                    <Loader2 className="size-3 animate-spin" />
-                  ) : (
-                    <FileText className="size-3" />
-                  )}
-                  {src.filename}
-                </button>
-              ))}
-            </div>
+          {message.agentAnalyses?.length ? (
+            <AgentAnalysisList analyses={message.agentAnalyses} />
           ) : null}
-          {openError ? (
-            <p className="mt-1.5 text-[11px] text-danger">
-              Impossible d’ouvrir le document.
-            </p>
-          ) : null}
+          <SourceChips sources={message.sources ?? []} isUser={isUser} />
         </div>
         <span className="mt-1 px-1 text-[10px] text-slate-400">
           {message.timestamp}
@@ -404,12 +578,16 @@ export function ConsultationPage() {
     filename: string
   } | null>(null)
   const [attachError, setAttachError] = useState<string | null>(null)
+  // Slash-command menu (agent picker) state.
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [slashClosed, setSlashClosed] = useState(false)
   const upload = useUploadDocument()
   const { data: documents } = useDocuments()
   const { conversations, upsert, remove } = useConversations()
   const scrollRef = useRef<HTMLDivElement>(null)
   const startRef = useRef<number>(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Whether we already auto-scoped the chat to the current attachment.
   const autoScopedRef = useRef(false)
 
@@ -564,6 +742,124 @@ export function ConsultationPage() {
     const measuredElapsed = () =>
       Math.round(((performance.now() - startRef.current) / 1000) * 10) / 10
 
+    // Agent mode: the message starts with a slash command (/legal, /finance,
+    // /compliance → one agent; /synthese → all three + streamed synthesis).
+    // Streamed (fragmented) exactly like the normal chat, via /agents/stream.
+    const agentCmd = parseAgentCommand(trimmed)
+    if (agentCmd) {
+      let agentLabel: string | undefined =
+        agentCmd.mode === 'single' ? agentCmd.label : undefined
+      let agentAnalyses: ChatAgentAnalysis[] | undefined
+      let agentSources: ChatMessageSource[] = []
+
+      // Create-or-update the single assistant message for this run.
+      const upsertAssistant = (patch: Partial<ChatMessage>) => {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === assistantId)) {
+            return prev.map((m) =>
+              m.id === assistantId ? { ...m, ...patch } : m,
+            )
+          }
+          return [
+            ...prev,
+            {
+              id: assistantId,
+              role: 'assistant',
+              content: '',
+              timestamp: nowLabel(),
+              agentLabel,
+              agentAnalyses,
+              sources: agentSources,
+              ...patch,
+            },
+          ]
+        })
+      }
+
+      await streamAgents(
+        agentCmd.toSend,
+        {
+          onAgent: ({ mode, domain, label }) => {
+            if (mode === 'single') {
+              agentLabel =
+                DOMAIN_STYLE[domain as AgentDomain]?.label ??
+                label ??
+                agentCmd.label
+            }
+          },
+          onSources: (incoming) => {
+            agentSources = toMessageSources(incoming)
+            if (started) upsertAssistant({ sources: agentSources })
+          },
+          onAnalyses: (list: StreamAgentAnalysis[]) => {
+            agentAnalyses = list.map((a) => ({
+              domain: a.domain ?? '',
+              label: DOMAIN_STYLE[a.domain as AgentDomain]?.label ?? a.label,
+              status: a.status,
+              answer: a.answer || a.message || 'Analyse indisponible.',
+              sources: toMessageSources(a.sources ?? []),
+            }))
+            started = true
+            setStreamingId(assistantId)
+            upsertAssistant({ agentAnalyses })
+          },
+          onDelta: (text) => {
+            if (!started) {
+              started = true
+              setStreamingId(assistantId)
+              upsertAssistant({ content: text })
+            } else {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content + text }
+                    : m,
+                ),
+              )
+            }
+          },
+          onDone: ({ answer, metadata }) => {
+            const elapsed =
+              typeof metadata.generation_time === 'number'
+                ? (metadata.generation_time as number)
+                : measuredElapsed()
+            if (!started && answer) {
+              started = true
+              upsertAssistant({ content: answer, elapsed })
+              return
+            }
+            upsertAssistant({ elapsed, sources: agentSources, agentAnalyses })
+          },
+          onError: (msg) => {
+            if (!started) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: assistantId,
+                  role: 'assistant',
+                  content: `Désolé, l’interrogation des agents a échoué : ${msg}`,
+                  timestamp: nowLabel(),
+                },
+              ])
+            } else {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: `${m.content}\n\n[Interrompu : ${msg}]` }
+                    : m,
+                ),
+              )
+            }
+          },
+        },
+        { topK: 15, finalK: 5, documentId: selectedDocId || null },
+      )
+
+      setStreamingId(null)
+      setSending(false)
+      return
+    }
+
     // Document mode: the user asked for a full document / web page / PDF.
     if (wantsDocument(trimmed)) {
       try {
@@ -693,6 +989,28 @@ export function ConsultationPage() {
     setSending(false)
   }
 
+  // Slash-command (agent picker) menu: shown while the composer holds only a
+  // partial "/command" token (no space yet), filtered by what's typed.
+  const slashToken = (() => {
+    const trimmedStart = draft.replace(/^\s+/, '')
+    if (!trimmedStart.startsWith('/')) return null
+    const m = /^\/([\p{L}]*)$/u.exec(trimmedStart)
+    return m ? m[1].toLowerCase() : null
+  })()
+  const slashMatches =
+    slashToken === null
+      ? []
+      : SLASH_COMMANDS.filter((c) => c.key.startsWith(slashToken))
+  const slashMenuOpen = !slashClosed && !sending && slashMatches.length > 0
+  const activeSlash = Math.min(slashIndex, Math.max(0, slashMatches.length - 1))
+
+  const applySlash = (cmd: SlashCommand) => {
+    setDraft(`${cmd.command} `)
+    setSlashClosed(true)
+    setSlashIndex(0)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <Card
@@ -799,64 +1117,141 @@ export function ConsultationPage() {
           {attachError ? (
             <p className="mb-2 text-xs text-danger">{attachError}</p>
           ) : null}
-          <div className="flex items-end gap-2 rounded-2xl border border-border bg-slate-50 p-2 shadow-sm transition-all focus-within:border-brand focus-within:bg-white focus-within:ring-2 focus-within:ring-brand/15">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/pdf,.pdf"
-              className="hidden"
-              onChange={(e) => {
-                attachFile(e.target.files?.[0])
-                // Allow re-selecting the same file later.
-                e.target.value = ''
-              }}
-            />
-            <button
-              type="button"
-              onClick={handleAttachClick}
-              disabled={sending || upload.isPending}
-              className="rounded-xl p-2.5 text-muted transition hover:bg-white hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="Joindre un fichier PDF"
-              title="Joindre un PDF"
-            >
-              {upload.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Paperclip className="size-4" />
-              )}
-            </button>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  send(draft)
-                }
-              }}
-              rows={1}
-              placeholder="Écrivez votre message…"
-              disabled={sending}
-              className="max-h-32 min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-sm outline-none placeholder:text-slate-400 disabled:opacity-60"
-            />
-            <Button
-              size="sm"
-              className="rounded-xl"
-              onClick={() => send(draft)}
-              disabled={sending || !draft.trim()}
-              leftIcon={
-                sending ? (
+          <div className="relative">
+            {slashMenuOpen ? (
+              <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-md overflow-hidden rounded-xl border border-border bg-white shadow-lg">
+                <p className="border-b border-border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                  Interroger un agent
+                </p>
+                {slashMatches.map((cmd, i) => {
+                  const Icon = cmd.icon
+                  return (
+                    <button
+                      key={cmd.key}
+                      type="button"
+                      // onMouseDown (not onClick) so the textarea keeps focus.
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applySlash(cmd)
+                      }}
+                      onMouseEnter={() => setSlashIndex(i)}
+                      className={cn(
+                        'flex w-full items-center gap-2.5 px-3 py-2 text-left transition',
+                        i === activeSlash ? 'bg-brand-soft' : 'hover:bg-slate-50',
+                      )}
+                    >
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">
+                        <Icon className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium text-slate-800">
+                            {cmd.label}
+                          </span>
+                          <code className="rounded bg-slate-100 px-1 text-[10px] text-slate-500">
+                            {cmd.command}
+                          </code>
+                        </span>
+                        <span className="block truncate text-[11px] text-slate-400">
+                          {cmd.desc}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+            <div className="flex items-end gap-2 rounded-2xl border border-border bg-slate-50 p-2 shadow-sm transition-all focus-within:border-brand focus-within:bg-white focus-within:ring-2 focus-within:ring-brand/15">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                className="hidden"
+                onChange={(e) => {
+                  attachFile(e.target.files?.[0])
+                  // Allow re-selecting the same file later.
+                  e.target.value = ''
+                }}
+              />
+              <button
+                type="button"
+                onClick={handleAttachClick}
+                disabled={sending || upload.isPending}
+                className="rounded-xl p-2.5 text-muted transition hover:bg-white hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Joindre un fichier PDF"
+                title="Joindre un PDF"
+              >
+                {upload.isPending ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <Send className="size-4" />
-                )
-              }
-            >
-              {sending ? 'Analyse…' : 'Envoyer'}
-            </Button>
+                  <Paperclip className="size-4" />
+                )}
+              </button>
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value)
+                  setSlashClosed(false)
+                  setSlashIndex(0)
+                }}
+                onKeyDown={(e) => {
+                  if (slashMenuOpen) {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault()
+                      setSlashIndex((i) => (i + 1) % slashMatches.length)
+                      return
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault()
+                      setSlashIndex(
+                        (i) =>
+                          (i - 1 + slashMatches.length) % slashMatches.length,
+                      )
+                      return
+                    }
+                    if (e.key === 'Enter' || e.key === 'Tab') {
+                      e.preventDefault()
+                      applySlash(slashMatches[activeSlash])
+                      return
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      setSlashClosed(true)
+                      return
+                    }
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    send(draft)
+                  }
+                }}
+                rows={1}
+                placeholder="Écrivez votre message… (tapez / pour choisir un agent)"
+                disabled={sending}
+                className="max-h-32 min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-sm outline-none placeholder:text-slate-400 disabled:opacity-60"
+              />
+              <Button
+                size="sm"
+                className="rounded-xl"
+                onClick={() => send(draft)}
+                disabled={sending || !draft.trim()}
+                leftIcon={
+                  sending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Send className="size-4" />
+                  )
+                }
+              >
+                {sending ? 'Analyse…' : 'Envoyer'}
+              </Button>
+            </div>
           </div>
           <p className="mt-2 px-1 text-[11px] text-slate-400">
-            Entrée pour envoyer · Maj + Entrée pour un retour à la ligne
+            Entrée pour envoyer · Maj + Entrée pour un retour à la ligne ·
+            Tapez <code className="rounded bg-slate-100 px-1">/</code> pour
+            interroger un agent
           </p>
         </div>
       </Card>

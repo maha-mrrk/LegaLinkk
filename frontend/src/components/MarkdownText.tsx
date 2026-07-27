@@ -5,13 +5,49 @@ import { cn } from '@/lib/cn'
  * Lightweight, dependency-free Markdown renderer for LLM answers.
  *
  * Supports the subset models actually emit: headings (#..######), unordered and
- * ordered lists, horizontal rules, and inline **bold**, *italic*, `code` and
- * __underline__. It builds React elements (never dangerouslySetInnerHTML), so it
- * is XSS-safe and works while an answer is still streaming in.
+ * ordered lists, GitHub-style pipe tables, horizontal rules, and inline
+ * **bold**, *italic*, `code` and __underline__. It builds React elements (never
+ * dangerouslySetInnerHTML), so it is XSS-safe and works while an answer is still
+ * streaming in.
  */
 
 let counter = 0
 const nextKey = () => `md-${counter++}`
+
+type CellAlign = 'left' | 'center' | 'right' | null
+
+/** Split a pipe-table row into trimmed cells (handles escaped `\|`). */
+function splitTableRow(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|')) s = s.slice(0, -1)
+  return s
+    .split(/(?<!\\)\|/)
+    .map((c) => c.replace(/\\\|/g, '|').trim())
+}
+
+/** A separator row is `| --- | :--: | ---: |` (dashes with optional colons). */
+function isTableSeparator(line: string): boolean {
+  if (!line.includes('-')) return false
+  const cells = splitTableRow(line)
+  return cells.length > 0 && cells.every((c) => /^:?-{1,}:?$/.test(c))
+}
+
+function cellAlign(sep: string): CellAlign {
+  const s = sep.trim()
+  const left = s.startsWith(':')
+  const right = s.endsWith(':')
+  if (left && right) return 'center'
+  if (right) return 'right'
+  if (left) return 'left'
+  return null
+}
+
+const ALIGN_CLASS: Record<'left' | 'center' | 'right', string> = {
+  left: 'text-left',
+  center: 'text-center',
+  right: 'text-right',
+}
 
 /** Render inline emphasis inside a single line of text. */
 function renderInline(text: string): ReactNode[] {
@@ -108,12 +144,81 @@ export function MarkdownText({
     list = null
   }
 
-  for (const raw of lines) {
+  const flushTable = (header: string[], aligns: CellAlign[], rows: string[][]) => {
+    const cols = header.length
+    const alignFor = (i: number) => {
+      const a = aligns[i]
+      return a ? ALIGN_CLASS[a] : ''
+    }
+    blocks.push(
+      <div key={nextKey()} className="my-2 overflow-x-auto">
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr>
+              {header.map((cell, i) => (
+                <th
+                  key={nextKey()}
+                  className={cn(
+                    'border border-black/10 bg-black/5 px-2 py-1 font-semibold text-slate-800',
+                    alignFor(i) || 'text-left',
+                  )}
+                >
+                  {renderInline(cell)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={nextKey()}>
+                {Array.from({ length: cols }, (_, i) => (
+                  <td
+                    key={nextKey()}
+                    className={cn(
+                      'border border-black/10 px-2 py-1 align-top',
+                      alignFor(i),
+                    )}
+                  >
+                    {renderInline(row[i] ?? '')}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>,
+    )
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
     const trimmed = raw.trim()
 
     if (!trimmed) {
       flushParagraph()
       flushList()
+      continue
+    }
+
+    // GFM pipe table: a row containing "|" immediately followed by a separator.
+    if (
+      trimmed.includes('|') &&
+      i + 1 < lines.length &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      flushParagraph()
+      flushList()
+      const header = splitTableRow(trimmed)
+      const aligns = splitTableRow(lines[i + 1]).map(cellAlign)
+      const rows: string[][] = []
+      let j = i + 2
+      while (j < lines.length && lines[j].trim().includes('|')) {
+        if (!lines[j].trim()) break
+        rows.push(splitTableRow(lines[j]))
+        j++
+      }
+      flushTable(header, aligns, rows)
+      i = j - 1
       continue
     }
 
