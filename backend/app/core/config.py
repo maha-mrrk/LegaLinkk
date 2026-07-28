@@ -40,6 +40,8 @@ class Settings(BaseSettings):
 
     # Document storage
     storage_path: str = "storage/documents"
+    generated_storage_path: str = "storage/generated"
+    brand_logo_path: str = "../frontend/public/logo.png"
     max_upload_size_mb: int = 25
     allowed_mime_types: str = "application/pdf"
 
@@ -96,6 +98,8 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
+    # Specialist analyses are intentionally more exhaustive than normal chat.
+    agent_max_tokens: int = 8192
     # Completion budget for the document-generation mode (full HTML reports:
     # per-article analysis + recommendations + risk-score note). Much larger than
     # a chat reply so long reports are not truncated mid-section.
@@ -146,6 +150,8 @@ class Settings(BaseSettings):
     celery_result_backend: str = ""
     # TTL (seconds) for ingestion progress entries stored in Redis.
     ingestion_progress_ttl_seconds: int = 60 * 60 * 24  # 24h
+    # TTL for reconnectable chat/agent jobs and their streamed event history.
+    chat_job_ttl_seconds: int = 60 * 60 * 24  # 24h
 
     # Authentication (JWT)
     jwt_secret: str = "change-me-in-production-please-use-a-long-random-secret"

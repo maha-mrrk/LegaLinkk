@@ -116,8 +116,22 @@ export function HistoryPage() {
                         ))}
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-semibold text-slate-900">
-                      {doc.score > 0 ? doc.score : '—'}
+                    <td className="px-4 py-3">
+                      {doc.score === null ? (
+                        <span className="text-xs font-medium text-muted">
+                          Non analysé
+                        </span>
+                      ) : (
+                        <span
+                          className={`inline-flex min-w-14 justify-center rounded-full px-2.5 py-1 text-xs font-bold ${
+                            doc.score < 50
+                              ? 'bg-red-50 text-red-700'
+                              : 'bg-emerald-50 text-emerald-700'
+                          }`}
+                        >
+                          {doc.score}/100
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge status={doc.status} />

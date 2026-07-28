@@ -11,9 +11,11 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import NotFoundError, PayloadTooLargeError, ValidationError
 from app.core.logging import get_logger
 from app.models.document import Document, DocumentStatus
+from app.repositories.analysis import DocumentAnalysisRepository
 from app.repositories.document import DocumentRepository
 from app.services.document_processing import DocumentProcessingService
 from app.services.progress import get_ingestion_progress_service
+from app.services.risk_score import calculate_risk_score
 from app.utils.storage import DocumentStorage, is_pdf_content
 
 logger = get_logger(__name__)
@@ -41,6 +43,7 @@ class DocumentService:
     ) -> None:
         self._settings = settings or get_settings()
         self._repo = DocumentRepository(session)
+        self._analyses = DocumentAnalysisRepository(session)
         self._session = session
         self._storage = storage or DocumentStorage(self._settings)
         self._processing = processing_service or DocumentProcessingService(
@@ -200,12 +203,45 @@ class DocumentService:
 
     async def list_documents(
         self, *, user_id: UUID, skip: int = 0, limit: int = 100
-    ) -> tuple[list[Document], int]:
+    ) -> tuple[list[Document], int, dict[UUID, int]]:
         documents = await self._repo.list_all(
             user_id=user_id, skip=skip, limit=limit
         )
         total = await self._repo.count(user_id=user_id)
-        return documents, total
+        payloads = await self._analyses.list_completed_payloads(
+            [document.id for document in documents],
+            user_id=user_id,
+        )
+        scores = {
+            document_id: score
+            for document_id, payload in payloads.items()
+            if (score := self._analysis_score(payload)) is not None
+        }
+        return documents, total, scores
+
+    @staticmethod
+    def _analysis_score(payload: dict) -> int | None:
+        """Resolve a persisted score, falling back to the UI risk-level scale."""
+        metadata = payload.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        findings = metadata.get("risk_findings")
+        missing = payload.get("missing_information")
+        if isinstance(findings, list) and findings:
+            return calculate_risk_score(
+                findings,
+                missing if isinstance(missing, list) else [],
+            )
+        for candidate in (
+            payload.get("score"),
+            payload.get("risk_score"),
+            metadata.get("score"),
+            metadata.get("risk_score"),
+        ):
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+                return max(0, min(100, round(candidate)))
+
+        risk_level = str(payload.get("risk_level") or "").lower()
+        return {"low": 85, "medium": 58, "high": 32}.get(risk_level)
 
     async def get_document(
         self, document_id: UUID, *, user_id: UUID

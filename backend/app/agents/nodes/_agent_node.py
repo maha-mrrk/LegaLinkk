@@ -16,6 +16,7 @@ from app.agents.base_agent import BaseGraphAgent
 from app.agents.nodes._state_utils import ensure_metadata
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
+from app.services.domain_guard import DomainGuardService
 from app.services.generator import GeneratorService
 from app.state.graph_state import GraphState
 
@@ -41,8 +42,15 @@ class DomainAgentNode(BaseGraphAgent):
     #: Specialized system prompt injected into the shared RAG pipeline.
     _system_prompt: str
 
-    def __init__(self, generator_service: GeneratorService) -> None:
+    def __init__(
+        self,
+        generator_service: GeneratorService,
+        domain_guard: DomainGuardService | None = None,
+        default_max_tokens: int = 8192,
+    ) -> None:
         self._generator = generator_service
+        self._domain_guard = domain_guard or DomainGuardService()
+        self._default_max_tokens = default_max_tokens
 
     @property
     def name(self) -> str:
@@ -57,6 +65,31 @@ class DomainAgentNode(BaseGraphAgent):
         metadata = ensure_metadata(state)
         history: Sequence[dict[str, str]] | None = metadata.get("history")
 
+        if state.get("target_agent") is not None:
+            assessment = self._domain_guard.assess(
+                question,
+                target_domain=self._domain,
+            )
+            if not assessment.allowed:
+                logger.info(
+                    "[multi_agent] node=%s rejected out-of-domain detected=%s",
+                    self._node_name,
+                    assessment.detected_domains,
+                )
+                state[self._result_key] = {
+                    "agent": self._agent_name,
+                    "domain": self._domain,
+                    "status": "out_of_scope",
+                    "answer": assessment.message,
+                    "sources": [],
+                    "metadata": {
+                        "detected_domains": list(assessment.detected_domains),
+                        "keywords_hit": list(assessment.keywords_hit),
+                    },
+                    "message": assessment.message,
+                }
+                return state
+
         logger.info("[multi_agent] node=%s analysing", self._node_name)
         try:
             rag: dict[str, Any] = await self._generator.answer_question(
@@ -65,7 +98,7 @@ class DomainAgentNode(BaseGraphAgent):
                 top_k=metadata.get("top_k"),
                 final_k=metadata.get("final_k"),
                 temperature=metadata.get("temperature"),
-                max_tokens=metadata.get("max_tokens"),
+                max_tokens=metadata.get("max_tokens") or self._default_max_tokens,
                 history=history,
                 document_id=metadata.get("document_id"),
                 system_prompt=self._system_prompt,

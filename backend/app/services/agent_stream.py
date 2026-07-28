@@ -35,6 +35,7 @@ from app.agents.nodes.agent_prompts import (
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
+from app.services.domain_guard import DomainGuardService
 from app.services.generator import GeneratorService
 from app.services.llm import LLMProvider, get_llm_provider
 
@@ -45,7 +46,11 @@ _COMMAND_RE = re.compile(
     r"^\s*/(legal|finance|compliance)\b[ \t]*(.*)$",
     re.IGNORECASE | re.DOTALL,
 )
-_DEFAULT_QUESTION = "Analyse ce contrat en détail."
+_DEFAULT_QUESTIONS = {
+    "legal": "Analyse les clauses et risques juridiques de ce contrat.",
+    "finance": "Analyse les montants, paiements et risques financiers de ce contrat.",
+    "compliance": "Analyse la conformité réglementaire et RGPD de ce contrat.",
+}
 
 # domain -> (public agent name, specialized system prompt, human label)
 _DOMAINS: dict[str, tuple[str, str, str]] = {
@@ -73,10 +78,12 @@ class AgentStreamService:
         *,
         settings: Settings | None = None,
         llm_provider: LLMProvider | None = None,
+        domain_guard: DomainGuardService | None = None,
     ) -> None:
         self._generator = generator
         self._settings = settings or get_settings()
         self._llm = llm_provider
+        self._domain_guard = domain_guard or DomainGuardService()
 
     def _get_llm(self) -> LLMProvider:
         if self._llm is None:
@@ -99,7 +106,10 @@ class AgentStreamService:
         match = _COMMAND_RE.match(raw)
         if match:
             domain = match.group(1).lower()
-            remainder = (match.group(2) or "").strip() or _DEFAULT_QUESTION
+            remainder = (
+                (match.group(2) or "").strip()
+                or _DEFAULT_QUESTIONS[domain]
+            )
             async for event in self._stream_single(
                 domain,
                 remainder,
@@ -140,13 +150,36 @@ class AgentStreamService:
         logger.info("[agent_stream] single domain=%s document_id=%s", domain, document_id)
         # Tell the UI which agent is answering before any content flows.
         yield {"type": "agent", "mode": "single", "domain": domain, "label": agent_name}
+        assessment = self._domain_guard.assess(
+            question,
+            target_domain=domain,
+        )
+        if not assessment.allowed:
+            message = assessment.message or "Cette question est hors domaine."
+            logger.info(
+                "[agent_stream] rejected domain=%s detected=%s",
+                domain,
+                assessment.detected_domains,
+            )
+            yield {"type": "delta", "text": message}
+            yield {
+                "type": "done",
+                "answer": message,
+                "metadata": {
+                    "status": "out_of_scope",
+                    "detected_domains": list(assessment.detected_domains),
+                    "keywords_hit": list(assessment.keywords_hit),
+                },
+            }
+            return
+        budget = max_tokens or self._settings.agent_max_tokens
         async for event in self._generator.stream_answer(
             question,
             user_id=user_id,
             top_k=top_k,
             final_k=final_k,
             temperature=temperature,
-            max_tokens=max_tokens,
+            max_tokens=budget,
             document_id=document_id,
             system_prompt=system_prompt,
         ):
@@ -166,6 +199,7 @@ class AgentStreamService:
         logger.info("[agent_stream] multi (synthesis) document_id=%s", document_id)
         yield {"type": "agent", "mode": "multi"}
         started = time.perf_counter()
+        budget = max_tokens or self._settings.agent_max_tokens
 
         analyses_public: list[dict[str, Any]] = []
         analyses_for_synth: list[tuple[str, str]] = []
@@ -179,7 +213,7 @@ class AgentStreamService:
                     top_k=top_k,
                     final_k=final_k,
                     temperature=temperature,
-                    max_tokens=max_tokens,
+                    max_tokens=budget,
                     document_id=document_id,
                     system_prompt=system_prompt,
                 )
@@ -247,7 +281,9 @@ class AgentStreamService:
         parts: list[str] = []
         try:
             async for delta in llm.stream_complete(
-                messages, temperature=self._settings.llm_temperature
+                messages,
+                temperature=self._settings.llm_temperature,
+                max_tokens=budget,
             ):
                 parts.append(delta)
                 yield {"type": "delta", "text": delta}
@@ -257,7 +293,9 @@ class AgentStreamService:
             if not parts:
                 try:
                     completion = await llm.complete(
-                        messages, temperature=self._settings.llm_temperature
+                        messages,
+                        temperature=self._settings.llm_temperature,
+                        max_tokens=budget,
                     )
                     text = (completion.content or "").strip()
                     if text:

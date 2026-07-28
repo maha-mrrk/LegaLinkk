@@ -1,9 +1,12 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  Eye,
+  FileOutput,
   FileText,
   HelpCircle,
   Loader2,
@@ -20,9 +23,15 @@ import {
   useLegalAnalysis,
   useRefreshLegalAnalysis,
 } from '@/hooks/useDocuments'
+import { useGeneratedDocuments } from '@/hooks/useGeneratedDocuments'
 import { cn } from '@/lib/cn'
 import { downloadDocumentPdf } from '@/services/chat'
-import type { LegalAnalysis, RiskLevel } from '@/types'
+import { fetchGeneratedDocumentBlob } from '@/services/generatedDocuments'
+import type {
+  GeneratedDocumentItem,
+  LegalAnalysis,
+  RiskLevel,
+} from '@/types'
 
 const tabs = [
   'Résumé',
@@ -30,6 +39,7 @@ const tabs = [
   'Informations manquantes',
   'Recommandations',
   'Sources',
+  'Documents générés',
 ]
 
 const RISK_META: Record<RiskLevel, { score: number; label: string }> = {
@@ -249,10 +259,15 @@ export function AnalysisPage() {
   const { id = '' } = useParams()
   const { data: documents } = useDocuments()
   const { data, isLoading, isError, error } = useLegalAnalysis(id)
+  const { data: generatedDocuments, isLoading: generatedDocumentsLoading } =
+    useGeneratedDocuments(id)
   const refresh = useRefreshLegalAnalysis(id)
+  const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState('Résumé')
+  const [severityFilter, setSeverityFilter] = useState<RiskLevel | 'all'>('all')
   const [pdfLoading, setPdfLoading] = useState(false)
   const [pdfError, setPdfError] = useState<string | null>(null)
+  const [generatedBusy, setGeneratedBusy] = useState<string | null>(null)
 
   const document = useMemo(
     () => documents?.find((d) => d.id === id),
@@ -260,12 +275,42 @@ export function AnalysisPage() {
   )
 
   const findings = data?.metadata?.risk_findings ?? []
-  const risk = data ? RISK_META[data.risk_level] : RISK_META.medium
+  const filteredFindings =
+    severityFilter === 'all'
+      ? findings
+      : findings.filter((finding) => finding.level === severityFilter)
+  const severityOptions: Array<{
+    value: RiskLevel | 'all'
+    label: string
+    count: number
+  }> = [
+    { value: 'all', label: 'Tous', count: findings.length },
+    {
+      value: 'high',
+      label: 'Élevée',
+      count: findings.filter((finding) => finding.level === 'high').length,
+    },
+    {
+      value: 'medium',
+      label: 'Modérée',
+      count: findings.filter((finding) => finding.level === 'medium').length,
+    },
+    {
+      value: 'low',
+      label: 'Faible',
+      count: findings.filter((finding) => finding.level === 'low').length,
+    },
+  ]
+  const riskMeta = data ? RISK_META[data.risk_level] : RISK_META.medium
+  const risk = {
+    ...riskMeta,
+    score: data?.risk_score ?? riskMeta.score,
+  }
   const analyzedAt = formatAnalyzedAt(data?.metadata?.analyzed_at)
 
   if (isLoading) {
     return (
-      <LoadingSpinner label="Analyse du contrat en cours… cela peut prendre un instant." />
+      <LoadingSpinner label="Analyse en cours en arrière-plan… vous pouvez quitter cette page et revenir plus tard." />
     )
   }
 
@@ -300,7 +345,12 @@ export function AnalysisPage() {
         analyzedAt,
       })
       const pdfName = `${filename.replace(/\.pdf$/i, '')}-analyse.pdf`
-      const blob = await downloadDocumentPdf(html, pdfName)
+      const blob = await downloadDocumentPdf(html, {
+        filename: pdfName,
+        title: `Analyse de ${filename}`,
+        sourceDocumentId: id,
+        kind: 'analysis_export',
+      })
       const url = URL.createObjectURL(blob)
       const anchor = window.document.createElement('a')
       anchor.href = url
@@ -309,12 +359,39 @@ export function AnalysisPage() {
       anchor.click()
       anchor.remove()
       URL.revokeObjectURL(url)
+      void queryClient.invalidateQueries({ queryKey: ['generated-documents'] })
     } catch {
       setPdfError(
         'L’export PDF a échoué. Veuillez réessayer dans un instant.',
       )
     } finally {
       setPdfLoading(false)
+    }
+  }
+
+  const openGeneratedDocument = async (
+    item: GeneratedDocumentItem,
+    download: boolean,
+  ) => {
+    setGeneratedBusy(item.id)
+    try {
+      const blob = await fetchGeneratedDocumentBlob(item.id)
+      const url = URL.createObjectURL(blob)
+      if (download) {
+        const anchor = window.document.createElement('a')
+        anchor.href = url
+        anchor.download = item.filename
+        window.document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch {
+      setPdfError("Impossible d'ouvrir ce document généré.")
+    } finally {
+      setGeneratedBusy(null)
     }
   }
 
@@ -418,46 +495,94 @@ export function AnalysisPage() {
           ) : null}
 
           {activeTab === 'Points critiques' ? (
-            findings.length ? (
-              findings.map((point, index) => (
-                <Card
-                  key={`${point.category}-${index}`}
-                  className="transition-all duration-200 hover:border-brand/20 hover:shadow-md"
-                  padding="lg"
-                >
-                  <div className="flex items-start gap-3">
-                    <div
+            <>
+              <Card padding="md">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-1 text-xs font-semibold text-slate-500">
+                    Filtrer par sévérité
+                  </span>
+                  {severityOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setSeverityFilter(option.value)}
                       className={cn(
-                        'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg',
-                        point.level === 'high'
-                          ? 'bg-red-50 text-danger'
-                          : point.level === 'medium'
-                            ? 'bg-amber-50 text-warning'
-                            : 'bg-emerald-50 text-success',
+                        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition',
+                        severityFilter === option.value
+                          ? option.value === 'high'
+                            ? 'border-red-200 bg-red-50 text-danger'
+                            : option.value === 'medium'
+                              ? 'border-amber-200 bg-amber-50 text-warning'
+                              : option.value === 'low'
+                                ? 'border-emerald-200 bg-emerald-50 text-success'
+                                : 'border-brand bg-brand text-white'
+                          : 'border-border bg-white text-slate-500 hover:border-brand/30 hover:text-slate-700',
                       )}
                     >
-                      <AlertTriangle className="size-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-sm font-semibold text-slate-900">
-                          {point.category}
-                        </h3>
-                        <RiskBadge risk={point.level} />
+                      {option.label}
+                      <span
+                        className={cn(
+                          'rounded-full px-1.5 py-0.5 text-[10px]',
+                          severityFilter === option.value
+                            ? 'bg-white/70 text-current'
+                            : 'bg-slate-100 text-slate-500',
+                        )}
+                      >
+                        {option.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </Card>
+
+              {findings.length ? (
+                filteredFindings.length ? (
+                  filteredFindings.map((point, index) => (
+                    <Card
+                      key={`${point.category}-${index}`}
+                      className="transition-all duration-200 hover:border-brand/20 hover:shadow-md"
+                      padding="lg"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={cn(
+                            'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg',
+                            point.level === 'high'
+                              ? 'bg-red-50 text-danger'
+                              : point.level === 'medium'
+                                ? 'bg-amber-50 text-warning'
+                                : 'bg-emerald-50 text-success',
+                          )}
+                        >
+                          <AlertTriangle className="size-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-semibold text-slate-900">
+                              {point.category}
+                            </h3>
+                            <RiskBadge risk={point.level} />
+                          </div>
+                          <p className="mt-1.5 text-sm text-slate-600">
+                            {point.detail}
+                          </p>
+                        </div>
                       </div>
-                      <p className="mt-1.5 text-sm text-slate-600">
-                        {point.detail}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-              ))
-            ) : (
-              <EmptyState
-                icon={<CheckCircle2 className="size-6 text-success" />}
-                text="Aucun point critique majeur détecté."
-              />
-            )
+                    </Card>
+                  ))
+                ) : (
+                  <EmptyState
+                    icon={<CheckCircle2 className="size-6 text-success" />}
+                    text="Aucun point critique pour cette sévérité."
+                  />
+                )
+              ) : (
+                <EmptyState
+                  icon={<CheckCircle2 className="size-6 text-success" />}
+                  text="Aucun point critique majeur détecté."
+                />
+              )}
+            </>
           ) : null}
 
           {activeTab === 'Informations manquantes' ? (
@@ -526,6 +651,74 @@ export function AnalysisPage() {
               <EmptyState
                 icon={<FileText className="size-6 text-muted" />}
                 text="Aucune source disponible."
+              />
+            )
+          ) : null}
+
+          {activeTab === 'Documents générés' ? (
+            generatedDocumentsLoading ? (
+              <LoadingSpinner label="Chargement des documents générés…" />
+            ) : generatedDocuments?.length ? (
+              <Card padding="lg">
+                <CardHeader
+                  title="Documents générés pour ce contrat"
+                  subtitle={`${generatedDocuments.length} document${generatedDocuments.length > 1 ? 's' : ''} enregistré${generatedDocuments.length > 1 ? 's' : ''}`}
+                />
+                <ul className="space-y-3">
+                  {generatedDocuments.map((item) => (
+                    <li
+                      key={item.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-slate-50 px-4 py-3"
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-500">
+                          <FileOutput className="size-5" />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-800">
+                            {item.title}
+                          </p>
+                          <p className="text-xs text-muted">
+                            {item.kind === 'analysis_export'
+                              ? 'Rapport d’analyse'
+                              : 'Document de consultation'}
+                            {' · '}
+                            {new Date(item.createdAt).toLocaleString('fr-FR')}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={generatedBusy === item.id}
+                          onClick={() => openGeneratedDocument(item, false)}
+                        >
+                          {generatedBusy === item.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Eye className="size-4" />
+                          )}
+                          Voir
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={generatedBusy === item.id}
+                          onClick={() => openGeneratedDocument(item, true)}
+                        >
+                          <Download className="size-4" />
+                          Télécharger
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ) : (
+              <EmptyState
+                icon={<FileOutput className="size-6 text-muted" />}
+                text="Aucun document généré pour ce contrat."
               />
             )
           ) : null}

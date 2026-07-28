@@ -86,7 +86,30 @@ class LegalAnalysisResponse(BaseModel):
 
     analysis: str
     risk_level: Literal["low", "medium", "high"]
+    risk_score: int = Field(ge=0, le=100)
     missing_information: list[str] = Field(default_factory=list)
     sources: list[dict[str, Any]] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LegalAnalysisJobRequest(LegalAnalyzeRequest):
+    """Durable analysis requires one concrete source contract."""
+
+    document_id: UUID
+
+
+class LegalAnalysisJobCreateResponse(BaseModel):
+    job_id: UUID
+    document_id: UUID
+    status: Literal["queued"]
+
+
+class LegalAnalysisJobStatusResponse(BaseModel):
+    job_id: UUID
+    document_id: UUID
+    status: Literal["queued", "processing", "completed", "failed"]
+    progress: int = Field(ge=0, le=100)
+    message: str
+    result: LegalAnalysisResponse | None = None
+    error: str | None = None

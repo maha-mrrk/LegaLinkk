@@ -3,6 +3,7 @@ import {
   ChevronDown,
   Coins,
   Download,
+  FileOutput,
   FileText,
   Gavel,
   Layers,
@@ -28,13 +29,14 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { suggestions } from '@/data/mock'
 import { useDocuments, useUploadDocument } from '@/hooks/useDocuments'
 import {
+  createBackgroundChatJob,
   downloadDocumentPdf,
   generateDocument,
-  streamQuestion,
+  streamBackgroundChatJob,
   wantsDocument,
 } from '@/services/chat'
-import { streamAgents, type StreamAgentAnalysis } from '@/services/agents'
 import { fetchDocumentBlob } from '@/services/documents'
+import { fetchGeneratedDocumentBlob } from '@/services/generatedDocuments'
 import { useConversations } from '@/hooks/useConversations'
 import { cn } from '@/lib/cn'
 import type {
@@ -188,7 +190,17 @@ function downloadDocument(html: string): void {
   URL.revokeObjectURL(url)
 }
 
-function DocumentCard({ html }: { html: string }) {
+function DocumentCard({
+  html,
+  sourceDocumentId,
+  question,
+  generatedDocumentId,
+}: {
+  html: string
+  sourceDocumentId?: string
+  question?: string
+  generatedDocumentId?: string
+}) {
   const [pdfLoading, setPdfLoading] = useState(false)
   const [pdfError, setPdfError] = useState<string | null>(null)
 
@@ -196,11 +208,23 @@ function DocumentCard({ html }: { html: string }) {
     setPdfError(null)
     setPdfLoading(true)
     try {
-      const blob = await downloadDocumentPdf(html)
+      const title = question
+        ? `Rapport — ${question.slice(0, 100)}`
+        : 'Document généré dans une consultation'
+      const filename = `document-legallink-${Date.now()}.pdf`
+      const blob = generatedDocumentId
+        ? await fetchGeneratedDocumentBlob(generatedDocumentId)
+        : await downloadDocumentPdf(html, {
+            filename,
+            title,
+            sourceDocumentId,
+            kind: 'chat_report',
+            question,
+          })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `document-legallink-${Date.now()}.pdf`
+      anchor.download = filename
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -505,7 +529,14 @@ function MessageRow({
               ) : null}
             </div>
           )}
-          {message.document ? <DocumentCard html={message.document} /> : null}
+          {message.document ? (
+            <DocumentCard
+              html={message.document}
+              sourceDocumentId={message.generatedReportSourceDocumentId}
+              question={message.generatedReportQuestion}
+              generatedDocumentId={message.generatedDocumentId}
+            />
+          ) : null}
           {message.agentAnalyses?.length ? (
             <AgentAnalysisList analyses={message.agentAnalyses} />
           ) : null}
@@ -569,6 +600,9 @@ export function ConsultationPage() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [selectedDocId, setSelectedDocId] = useState('')
+  const [chatMode, setChatMode] = useState<'conversation' | 'generation'>(
+    'conversation',
+  )
   const [sending, setSending] = useState(false)
   const [streamingId, setStreamingId] = useState<string | null>(null)
   const [thinkingStep, setThinkingStep] = useState(0)
@@ -588,6 +622,7 @@ export function ConsultationPage() {
   const startRef = useRef<number>(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const resumingJobsRef = useRef(new Set<string>())
   // Whether we already auto-scoped the chat to the current attachment.
   const autoScopedRef = useRef(false)
 
@@ -715,6 +750,134 @@ export function ConsultationPage() {
     return () => clearInterval(id)
   }, [sending])
 
+  // Reconnect to any unfinished Redis-backed response when a saved
+  // conversation is reopened after navigation or a browser refresh.
+  useEffect(() => {
+    if (sending) return
+    const pending = messages.find(
+      (message) =>
+        message.role === 'assistant' &&
+        message.backgroundJobId &&
+        message.backgroundJobStatus === 'processing',
+    )
+    if (!pending?.backgroundJobId) return
+    if (resumingJobsRef.current.has(pending.backgroundJobId)) return
+
+    const jobId = pending.backgroundJobId
+    const assistantId = pending.id
+    resumingJobsRef.current.add(jobId)
+    setSending(true)
+    setStreamingId(assistantId)
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === assistantId
+          ? {
+              ...message,
+              content: '',
+              sources: [],
+              agentAnalyses: undefined,
+            }
+          : message,
+      ),
+    )
+
+    let restoredSources: ChatMessageSource[] = []
+    void streamBackgroundChatJob(jobId, {
+      onAgent: ({ domain, label }) => {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantId
+              ? {
+                  ...message,
+                  agentLabel:
+                    DOMAIN_STYLE[domain as AgentDomain]?.label ??
+                    label ??
+                    message.agentLabel,
+                }
+              : message,
+          ),
+        )
+      },
+      onSources: (incoming) => {
+        restoredSources = toMessageSources(incoming)
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantId
+              ? { ...message, sources: restoredSources }
+              : message,
+          ),
+        )
+      },
+      onAnalyses: (list) => {
+        const analyses: ChatAgentAnalysis[] = list.map((analysis) => ({
+          domain: analysis.domain ?? '',
+          label:
+            DOMAIN_STYLE[analysis.domain as AgentDomain]?.label ?? analysis.label,
+          status: analysis.status,
+          answer:
+            analysis.answer || analysis.message || 'Analyse indisponible.',
+          sources: toMessageSources(analysis.sources ?? []),
+        }))
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantId
+              ? { ...message, agentAnalyses: analyses }
+              : message,
+          ),
+        )
+      },
+      onDelta: (text) => {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantId
+              ? { ...message, content: message.content + text }
+              : message,
+          ),
+        )
+      },
+      onDone: ({ answer, metadata }) => {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantId
+              ? {
+                  ...message,
+                  content: message.content || answer || '',
+                  sources: restoredSources.length
+                    ? restoredSources
+                    : message.sources,
+                  elapsed:
+                    typeof metadata.generation_time === 'number'
+                      ? metadata.generation_time
+                      : message.elapsed,
+                  backgroundJobStatus: 'completed',
+                }
+              : message,
+          ),
+        )
+      },
+      onError: (message) => {
+        setMessages((prev) =>
+          prev.map((item) =>
+            item.id === assistantId
+              ? {
+                  ...item,
+                  content:
+                    item.content ||
+                    `Désolé, la génération a échoué : ${message}`,
+                  backgroundJobStatus: 'failed',
+                }
+              : item,
+          ),
+        )
+      },
+    }).finally(() => {
+      resumingJobsRef.current.delete(jobId)
+      setStreamingId(null)
+      setSending(false)
+    })
+    // The Set prevents duplicate followers while replayed fragments update messages.
+  }, [messages, sending])
+
   const send = async (content: string) => {
     const trimmed = content.trim()
     if (!trimmed || sending) return
@@ -741,6 +904,23 @@ export function ConsultationPage() {
 
     const measuredElapsed = () =>
       Math.round(((performance.now() - startRef.current) / 1000) * 10) / 10
+
+    // Conversation mode never creates files implicitly. If the user asks for
+    // one, guide them to the explicit generation mode instead.
+    if (chatMode === 'conversation' && wantsDocument(trimmed)) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantId,
+          role: 'assistant',
+          content:
+            'Cette demande nécessite le mode **Génération PDF**. Sélectionnez ce mode au-dessus de la zone de saisie, puis renvoyez votre demande. Aucun document n’a été créé.',
+          timestamp: nowLabel(),
+        },
+      ])
+      setSending(false)
+      return
+    }
 
     // Agent mode: the message starts with a slash command (/legal, /finance,
     // /compliance → one agent; /synthese → all three + streamed synthesis).
@@ -776,8 +956,33 @@ export function ConsultationPage() {
         })
       }
 
-      await streamAgents(
-        agentCmd.toSend,
+      let job
+      try {
+        job = await createBackgroundChatJob(agentCmd.toSend, {
+          mode: 'agent',
+          topK: 15,
+          finalK: 5,
+          documentId: selectedDocId || null,
+        })
+      } catch (error) {
+        upsertAssistant({
+          content: `Désolé, la réponse n’a pas pu être démarrée : ${
+            error instanceof Error ? error.message : 'service indisponible'
+          }`,
+        })
+        setSending(false)
+        return
+      }
+      started = true
+      setStreamingId(assistantId)
+      upsertAssistant({
+        backgroundJobId: job.jobId,
+        backgroundJobMode: 'agent',
+        backgroundJobStatus: 'processing',
+      })
+
+      await streamBackgroundChatJob(
+        job.jobId,
         {
           onAgent: ({ mode, domain, label }) => {
             if (mode === 'single') {
@@ -791,7 +996,7 @@ export function ConsultationPage() {
             agentSources = toMessageSources(incoming)
             if (started) upsertAssistant({ sources: agentSources })
           },
-          onAnalyses: (list: StreamAgentAnalysis[]) => {
+          onAnalyses: (list) => {
             agentAnalyses = list.map((a) => ({
               domain: a.domain ?? '',
               label: DOMAIN_STYLE[a.domain as AgentDomain]?.label ?? a.label,
@@ -828,7 +1033,12 @@ export function ConsultationPage() {
               upsertAssistant({ content: answer, elapsed })
               return
             }
-            upsertAssistant({ elapsed, sources: agentSources, agentAnalyses })
+            upsertAssistant({
+              elapsed,
+              sources: agentSources,
+              agentAnalyses,
+              backgroundJobStatus: 'completed',
+            })
           },
           onError: (msg) => {
             if (!started) {
@@ -845,14 +1055,17 @@ export function ConsultationPage() {
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
-                    ? { ...m, content: `${m.content}\n\n[Interrompu : ${msg}]` }
+                    ? {
+                        ...m,
+                        content: `${m.content}\n\n[Interrompu : ${msg}]`,
+                        backgroundJobStatus: 'failed',
+                      }
                     : m,
                 ),
               )
             }
           },
         },
-        { topK: 15, finalK: 5, documentId: selectedDocId || null },
       )
 
       setStreamingId(null)
@@ -860,8 +1073,8 @@ export function ConsultationPage() {
       return
     }
 
-    // Document mode: the user asked for a full document / web page / PDF.
-    if (wantsDocument(trimmed)) {
+    // Generation mode: every request becomes a persisted, branded PDF.
+    if (chatMode === 'generation') {
       try {
         const result = await generateDocument(trimmed, {
           topK: 15,
@@ -869,6 +1082,11 @@ export function ConsultationPage() {
           documentId: selectedDocId || null,
         })
         const docSources = toMessageSources(result.sources)
+        const sourceIds = Array.from(
+          new Set(result.sources.map((source) => source.document_id).filter(Boolean)),
+        )
+        const reportSourceDocumentId =
+          selectedDocId || (sourceIds.length === 1 ? sourceIds[0] : undefined)
         const elapsed =
           typeof result.metadata?.generation_time === 'number'
             ? (result.metadata.generation_time as number)
@@ -881,6 +1099,9 @@ export function ConsultationPage() {
             content:
               'Voici le document généré à partir de vos documents. Vous pouvez l’imprimer en PDF ou le télécharger.',
             document: result.html,
+            generatedReportSourceDocumentId: reportSourceDocumentId,
+            generatedReportQuestion: trimmed,
+            generatedDocumentId: result.generated_document_id,
             sources: docSources,
             timestamp: nowLabel(),
             elapsed,
@@ -904,8 +1125,47 @@ export function ConsultationPage() {
       return
     }
 
-    await streamQuestion(
-      trimmed,
+    let job
+    try {
+      job = await createBackgroundChatJob(trimmed, {
+        mode: 'chat',
+        topK: 15,
+        finalK: 5,
+        documentId: selectedDocId || null,
+      })
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantId,
+          role: 'assistant',
+          content: `Désolé, la réponse n’a pas pu être démarrée : ${
+            error instanceof Error ? error.message : 'service indisponible'
+          }`,
+          timestamp: nowLabel(),
+        },
+      ])
+      setSending(false)
+      return
+    }
+    started = true
+    setStreamingId(assistantId)
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        sources,
+        timestamp: nowLabel(),
+        backgroundJobId: job.jobId,
+        backgroundJobMode: 'chat',
+        backgroundJobStatus: 'processing',
+      },
+    ])
+
+    await streamBackgroundChatJob(
+      job.jobId,
       {
         onSources: (incoming) => {
           sources = toMessageSources(incoming)
@@ -956,7 +1216,14 @@ export function ConsultationPage() {
           }
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, sources, elapsed } : m,
+              m.id === assistantId
+                ? {
+                    ...m,
+                    sources,
+                    elapsed,
+                    backgroundJobStatus: 'completed',
+                  }
+                : m,
             ),
           )
         },
@@ -975,14 +1242,17 @@ export function ConsultationPage() {
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
-                  ? { ...m, content: `${m.content}\n\n[Interrompu : ${msg}]` }
+                  ? {
+                      ...m,
+                      content: `${m.content}\n\n[Interrompu : ${msg}]`,
+                      backgroundJobStatus: 'failed',
+                    }
                   : m,
               ),
             )
           }
         },
       },
-      { topK: 15, finalK: 5, documentId: selectedDocId || null },
     )
 
     setStreamingId(null)
@@ -1001,7 +1271,11 @@ export function ConsultationPage() {
     slashToken === null
       ? []
       : SLASH_COMMANDS.filter((c) => c.key.startsWith(slashToken))
-  const slashMenuOpen = !slashClosed && !sending && slashMatches.length > 0
+  const slashMenuOpen =
+    chatMode === 'conversation' &&
+    !slashClosed &&
+    !sending &&
+    slashMatches.length > 0
   const activeSlash = Math.min(slashIndex, Math.max(0, slashMatches.length - 1))
 
   const applySlash = (cmd: SlashCommand) => {
@@ -1070,6 +1344,42 @@ export function ConsultationPage() {
 
         {/* Composer */}
         <div className="border-t border-border bg-white p-4">
+          <div className="mb-2 flex w-full rounded-xl border border-border bg-slate-50 p-1">
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => {
+                setChatMode('conversation')
+                setSlashClosed(false)
+              }}
+              className={cn(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50',
+                chatMode === 'conversation'
+                  ? 'bg-white text-brand shadow-sm ring-1 ring-border'
+                  : 'text-slate-500 hover:text-slate-700',
+              )}
+            >
+              <MessageSquare className="size-3.5" />
+              Conversation
+            </button>
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => {
+                setChatMode('generation')
+                setSlashClosed(true)
+              }}
+              className={cn(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50',
+                chatMode === 'generation'
+                  ? 'bg-brand text-white shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700',
+              )}
+            >
+              <FileOutput className="size-3.5" />
+              Génération PDF
+            </button>
+          </div>
           <div className="mb-2 flex items-center gap-2 text-xs">
             <span className="flex shrink-0 items-center gap-1.5 font-medium text-slate-500">
               <Library className="size-3.5 text-brand" />
@@ -1227,7 +1537,11 @@ export function ConsultationPage() {
                   }
                 }}
                 rows={1}
-                placeholder="Écrivez votre message… (tapez / pour choisir un agent)"
+                placeholder={
+                  chatMode === 'generation'
+                    ? 'Décrivez le rapport PDF à générer…'
+                    : 'Écrivez votre message… (tapez / pour choisir un agent)'
+                }
                 disabled={sending}
                 className="max-h-32 min-h-[44px] flex-1 resize-none bg-transparent py-2.5 text-sm outline-none placeholder:text-slate-400 disabled:opacity-60"
               />
@@ -1249,9 +1563,18 @@ export function ConsultationPage() {
             </div>
           </div>
           <p className="mt-2 px-1 text-[11px] text-slate-400">
-            Entrée pour envoyer · Maj + Entrée pour un retour à la ligne ·
-            Tapez <code className="rounded bg-slate-100 px-1">/</code> pour
-            interroger un agent
+            {chatMode === 'generation' ? (
+              <>
+                Chaque demande crée et enregistre automatiquement un PDF ·
+                Entrée pour envoyer
+              </>
+            ) : (
+              <>
+                Entrée pour envoyer · Maj + Entrée pour un retour à la ligne ·
+                Tapez <code className="rounded bg-slate-100 px-1">/</code> pour
+                interroger un agent
+              </>
+            )}
           </p>
         </div>
       </Card>

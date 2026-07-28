@@ -132,9 +132,15 @@ def build_multi_agent_graph(
 
     generator = GeneratorService(session, settings=settings)
     command_parser = CommandParserNode()
-    legal_node = LegalNode(generator)
-    finance_node = FinanceNode(generator)
-    compliance_node = ComplianceNode(generator)
+    legal_node = LegalNode(
+        generator, default_max_tokens=settings.agent_max_tokens
+    )
+    finance_node = FinanceNode(
+        generator, default_max_tokens=settings.agent_max_tokens
+    )
+    compliance_node = ComplianceNode(
+        generator, default_max_tokens=settings.agent_max_tokens
+    )
     synthesis_node = SynthesisNode(settings=settings)
 
     retry = transient_retry_policy(3)

@@ -25,6 +25,11 @@ What is grounded vs. what is your job:
 4. Only if the context contains NO relevant contract content at all, output a minimal HTML page whose body contains only: {no_answer}
 5. Answer in the language of the user's request (French unless the request is in another language).
 6. Cite the source document filename and page number(s) where relevant, e.g. a short "Sources" section at the end.
+7. Write exclusively for lawyers and business users. Never mention internal technical
+   mechanisms or vocabulary such as chunk/chunks, passage retrieval, RAG, embedding,
+   vector/vector database, reranking, prompt, token, context window, LLM, model,
+   provider, API, pipeline or database. Say "passage du contrat", "document source",
+   "analyse" or "recherche dans les documents" when a non-technical explanation is needed.
 
 Systematic, exhaustive analysis method (MANDATORY — do this BEFORE writing the report):
 
@@ -56,6 +61,9 @@ Output format (MANDATORY):
 - Use a clean, professional, print-friendly layout (readable serif or system font, sensible margins, a title, headings, and spacing). Use @media print friendly styles.
 - Prefer semantic structure: a document title (<h1>), sections (<h2>), paragraphs, and tables where data is tabular (e.g. a per-clause risk table with a score column).
 - Keep it a document (report / note / web page), not a chat message.
+- Do NOT add a logo, brand banner, repeating page header, footer, page number, or LegalLink
+  signature yourself. The application applies the canonical LegalLink visual shell
+  automatically after generation. Produce only the report's substantive title and content.
 """
 
 # System prompt for the MAP step of full-document analysis: only used when a
@@ -96,6 +104,9 @@ Grounding rules:
 - Base every FACT (clause text, article numbers, parties, dates, amounts, references) strictly on the provided context. Never invent facts that are not present.
 - ANALYSIS is your job and is expected: interpret clauses, assess legal risk, detect missing / ambiguous / unbalanced (asymmetric) clauses, self-contradictions and broken references, and give concrete recommendations — all reasoned from the grounded facts. Producing such analysis is NOT "inventing".
 - Work in the language of the contract (French unless it is written in another language).
+- Use business and legal language only. Never expose internal terms such as chunk,
+  RAG, embedding, vector, retrieval/reranking, prompt, token, context window, LLM,
+  model, provider, API, pipeline or database.
 
 Return ONLY a valid JSON object (no markdown, no code fences, no text before or after) with EXACTLY these keys:
 {
@@ -143,6 +154,10 @@ Rules:
    higher means higher risk), briefly justify each score, and give an overall score.
 8. When helpful, mention the source document filename and page number(s).
 9. The context may be in French or English; answer in the language of the question.
+10. Write for legal and business users only. Never mention internal terms such as
+    chunk/chunks, RAG, embedding, vector database, retrieval/reranking, prompt,
+    token, context window, LLM, model, provider, API, pipeline or database. Use
+    "passage du contrat", "document source" or "recherche dans les documents".
 """
 
 

@@ -57,7 +57,7 @@ export interface DocumentItem {
   type: AnalysisCategory | string
   date: string
   agents: string[]
-  score: number
+  score: number | null
   status: DocumentStatus
   pageCount?: number
   indexed?: boolean
@@ -117,6 +117,7 @@ export interface LegalRiskFinding {
 export interface LegalAnalysis {
   analysis: string
   risk_level: RiskLevel
+  risk_score: number
   missing_information: string[]
   sources: LegalSource[]
   recommendations: string[]
@@ -143,6 +144,7 @@ export interface ChatAnswer {
 export interface ChatDocumentResult {
   /** Complete, self-contained HTML document (printable to PDF). */
   html: string
+  generated_document_id: string
   sources: ChatSourceRef[]
   metadata?: Record<string, unknown>
 }
@@ -201,6 +203,25 @@ export interface ChatMessage {
   agentLabel?: string
   /** Multi-agent mode: the 3 individual analyses behind the synthesis. */
   agentAnalyses?: ChatAgentAnalysis[]
+  /** Redis-backed generation that can be replayed after navigation/refresh. */
+  backgroundJobId?: string
+  backgroundJobMode?: 'chat' | 'agent'
+  backgroundJobStatus?: 'processing' | 'completed' | 'failed'
+  generatedReportSourceDocumentId?: string
+  generatedReportQuestion?: string
+  generatedDocumentId?: string
+}
+
+export interface GeneratedDocumentItem {
+  id: string
+  sourceDocumentId: string | null
+  sourceDocumentFilename: string | null
+  title: string
+  filename: string
+  fileSize: number
+  kind: 'chat_report' | 'analysis_export'
+  question: string | null
+  createdAt: string
 }
 
 export interface CriticalPoint {

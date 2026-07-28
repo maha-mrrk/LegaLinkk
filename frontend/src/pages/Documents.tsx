@@ -6,6 +6,7 @@ import {
   Download,
   Eye,
   FileText,
+  Files,
   Loader2,
   Trash2,
   Upload,
@@ -242,6 +243,12 @@ export function DocumentsPage() {
                   <Link to={`/analysis/${doc.id}`}>
                     <Button size="sm" variant="outline">
                       Voir l’analyse
+                    </Button>
+                  </Link>
+                  <Link to={`/generated-documents?contractId=${doc.id}`}>
+                    <Button size="sm" variant="outline">
+                      <Files className="size-4" />
+                      Rapports générés
                     </Button>
                   </Link>
                 </div>

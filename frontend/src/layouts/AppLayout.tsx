@@ -45,6 +45,15 @@ export function DocumentsLayout() {
   return <AppShell title="Mes contrats" subtitle="Vos contrats déposés et leurs analyses" />
 }
 
+export function GeneratedDocumentsLayout() {
+  return (
+    <AppShell
+      title="Documents générés"
+      subtitle="Vos rapports et exports PDF"
+    />
+  )
+}
+
 export function AnalysisLayout() {
   return <AppShell title="Résultat d’analyse" subtitle="Points critiques et niveau de risque" />
 }

@@ -24,9 +24,12 @@ _COMMAND_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# Fallback question when a command carries no text of its own (e.g. just
-# "/legal"): the specialized system prompt still frames the analysis.
-_DEFAULT_QUESTION = "Analyse ce contrat en détail."
+# Domain-specific fallbacks keep a bare command inside the selected mandate.
+_DEFAULT_QUESTIONS = {
+    "legal": "Analyse les clauses et risques juridiques de ce contrat.",
+    "finance": "Analyse les montants, paiements et risques financiers de ce contrat.",
+    "compliance": "Analyse la conformité réglementaire et RGPD de ce contrat.",
+}
 
 
 class CommandParserNode(BaseGraphAgent):
@@ -51,7 +54,7 @@ class CommandParserNode(BaseGraphAgent):
             domain = match.group(1).lower()
             remainder = (match.group(2) or "").strip()
             state["target_agent"] = domain  # "legal" | "finance" | "compliance"
-            state["user_query"] = remainder or _DEFAULT_QUESTION
+            state["user_query"] = remainder or _DEFAULT_QUESTIONS[domain]
             logger.info(
                 "[multi_agent] command detected target=%s has_text=%s",
                 domain,

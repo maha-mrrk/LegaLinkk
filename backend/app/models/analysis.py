@@ -16,7 +16,7 @@ from app.db.base import Base
 
 # Increment this value when the analysis prompt, output schema, or risk rules
 # change. Older rows are then recomputed automatically on their next access.
-ANALYSIS_VERSION = "1"
+ANALYSIS_VERSION = "3"
 
 
 class AnalysisStatus(str, enum.Enum):

@@ -1,8 +1,11 @@
 """Pydantic schemas for grounded RAG chat/query."""
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.models.generated_document import GeneratedDocumentKind
 
 
 class ChatQueryRequest(BaseModel):
@@ -36,6 +39,28 @@ class ChatQueryRequest(BaseModel):
         le=8192,
         description="Completion budget (default LLM_MAX_TOKENS, typically 1024)",
     )
+
+
+class ChatJobCreateRequest(ChatQueryRequest):
+    """Start a reconnectable background chat or specialist-agent generation."""
+
+    mode: Literal["chat", "agent"] = "chat"
+
+
+class ChatJobCreateResponse(BaseModel):
+    """Immediate acknowledgment for a Redis-backed background generation."""
+
+    job_id: UUID
+    status: Literal["queued"]
+
+
+class ChatJobStatusResponse(BaseModel):
+    """Current durable status used when restoring the Consultation page."""
+
+    job_id: UUID
+    mode: Literal["chat", "agent"]
+    status: Literal["queued", "processing", "completed", "failed"]
+    event_count: int
 
 
 class ChatSource(BaseModel):
@@ -77,6 +102,7 @@ class ChatDocumentResponse(BaseModel):
     """Grounded, self-contained HTML document (printable to PDF) with sources."""
 
     html: str
+    generated_document_id: UUID
     sources: list[ChatSource]
     metadata: ChatMetadata
 
@@ -90,3 +116,7 @@ class ChatDocumentPdfRequest(BaseModel):
         max_length=200,
         description="Suggested download filename (without path).",
     )
+    title: str | None = Field(default=None, max_length=255)
+    source_document_id: UUID | None = None
+    kind: GeneratedDocumentKind = GeneratedDocumentKind.CHAT_REPORT
+    question: str | None = Field(default=None, max_length=10_000)

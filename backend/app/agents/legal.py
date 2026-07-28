@@ -15,6 +15,7 @@ from app.agents.intent import DOMAIN_KEYWORDS
 from app.agents.risk import RiskAssessment, RiskClassifier, RuleBasedRiskClassifier
 from app.core.logging import get_logger
 from app.services.generator import GeneratorService
+from app.services.risk_score import calculate_risk_score, derive_risk_level
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,11 @@ Strict rules:
    rights of each party, and summaries of contractual provisions.
 10. The context may be in French or English; answer in the language of the
     question while using only facts from the context.
+11. Write exclusively for lawyers and business users. Never expose internal
+    technical vocabulary such as chunk/chunks, RAG, embedding, vector database,
+    retrieval/reranking, prompt, token, context window, LLM, model, provider,
+    API, pipeline or database. Prefer "passage du contrat", "document source"
+    and "recherche dans les documents".
 """
 
 
@@ -129,16 +135,30 @@ class LegalAgent(BaseAgent):
                 structured["risk_level"],
                 len(structured["risk_findings"]),
             )
+            structured_findings = list(structured["risk_findings"])
+            missing_information = list(structured["missing_information"])
+            model_risk_level = structured["risk_level"]
+            risk_level = derive_risk_level(
+                structured_findings,
+                default=model_risk_level,
+            )
+            risk_score = calculate_risk_score(
+                structured_findings,
+                missing_information,
+            )
             payload: dict[str, Any] = {
                 "analysis": answer,
-                "risk_level": structured["risk_level"],
-                "missing_information": structured["missing_information"],
+                "risk_level": risk_level,
+                "risk_score": risk_score,
+                "missing_information": missing_information,
                 "sources": sources,
                 "recommendations": structured["recommendations"],
                 "metadata": {
                     **rag_metadata,
                     "agent": self.name,
-                    "risk_findings": structured["risk_findings"],
+                    "risk_findings": structured_findings,
+                    "risk_score": risk_score,
+                    "model_risk_level": model_risk_level,
                 },
             }
             logger.info("Legal analysis completed.")
@@ -153,23 +173,31 @@ class LegalAgent(BaseAgent):
         )
         logger.info("Risk assessment completed. level=%s", assessment.risk_level)
 
+        fallback_findings = [
+            {
+                "level": f.level,
+                "category": f.category,
+                "detail": f.detail,
+            }
+            for f in assessment.findings
+        ]
+        missing_information = list(assessment.missing_information)
+        risk_score = calculate_risk_score(
+            fallback_findings,
+            missing_information,
+        )
         payload = {
             "analysis": answer,
             "risk_level": assessment.risk_level,
-            "missing_information": list(assessment.missing_information),
+            "risk_score": risk_score,
+            "missing_information": missing_information,
             "sources": sources,
             "recommendations": list(assessment.recommendations),
             "metadata": {
                 **rag_metadata,
                 "agent": self.name,
-                "risk_findings": [
-                    {
-                        "level": f.level,
-                        "category": f.category,
-                        "detail": f.detail,
-                    }
-                    for f in assessment.findings
-                ],
+                "risk_findings": fallback_findings,
+                "risk_score": risk_score,
             },
         }
 
@@ -200,6 +228,7 @@ class LegalAgent(BaseAgent):
             sources=tuple(payload["sources"]),
             metadata={
                 "risk_level": payload["risk_level"],
+                "risk_score": payload["risk_score"],
                 "missing_information": payload["missing_information"],
                 "recommendations": payload["recommendations"],
                 **payload["metadata"],

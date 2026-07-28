@@ -112,3 +112,20 @@ async def test_foreign_conversation_cannot_receive_messages() -> None:
         )
 
     service._repo.append_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"risk_level": "low"}, 85),
+        ({"risk_level": "medium"}, 58),
+        ({"risk_level": "high"}, 32),
+        ({"metadata": {"risk_score": 72.4}}, 72),
+        ({"risk_score": 150}, 100),
+        ({}, None),
+    ],
+)
+def test_history_score_uses_persisted_analysis(
+    payload: dict, expected: int | None
+) -> None:
+    assert DocumentService._analysis_score(payload) == expected

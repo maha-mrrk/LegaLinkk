@@ -19,6 +19,7 @@ interface BackendDocument {
   index_status: string
   indexed_at: string | null
   indexed_chunk_count: number | null
+  analysis_score: number | null
 }
 
 const STATUS_MAP: Record<BackendDocument['status'], DocumentStatus> = {
@@ -62,7 +63,7 @@ function toDocumentItem(doc: BackendDocument): DocumentItem {
     type: 'Contrat',
     date: formatDate(doc.upload_date),
     agents: isIndexed ? ['JU', 'RI', 'CO'] : [],
-    score: 0,
+    score: doc.analysis_score,
     status: STATUS_MAP[doc.status] ?? 'pending',
     pageCount: doc.page_count ?? undefined,
     indexed: isIndexed,

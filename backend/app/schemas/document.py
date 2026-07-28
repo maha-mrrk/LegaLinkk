@@ -35,6 +35,12 @@ class DocumentResponse(BaseModel):
     indexed_at: datetime | None = None
     indexed_chunk_count: int | None = None
     embedding_model: str | None = None
+    analysis_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Stored contract-analysis score; null until an analysis exists",
+    )
 
 
 class DocumentListResponse(BaseModel):

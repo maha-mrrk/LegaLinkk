@@ -22,3 +22,39 @@ export async function analyzeContract(params: {
   })
   return data
 }
+
+export interface AnalysisJobStatus {
+  job_id: string
+  document_id: string
+  status: 'queued' | 'processing' | 'completed' | 'failed'
+  progress: number
+  message: string
+  result: LegalAnalysis | null
+  error: string | null
+}
+
+export async function startAnalysisJob(params: {
+  documentId: string
+  forceRefresh?: boolean
+}): Promise<{ job_id: string }> {
+  const { data } = await api.post<{ job_id: string }>(
+    '/agents/legal/analyze/jobs',
+    {
+      question: DEFAULT_QUESTION,
+      document_id: params.documentId,
+      force_refresh: params.forceRefresh ?? false,
+      top_k: 15,
+      final_k: 5,
+    },
+  )
+  return data
+}
+
+export async function fetchAnalysisJob(
+  jobId: string,
+): Promise<AnalysisJobStatus> {
+  const { data } = await api.get<AnalysisJobStatus>(
+    `/agents/legal/analyze/jobs/${jobId}`,
+  )
+  return data
+}

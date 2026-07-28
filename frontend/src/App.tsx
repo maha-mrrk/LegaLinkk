@@ -5,6 +5,7 @@ import {
   ConsultationLayout,
   DashboardLayout,
   DocumentsLayout,
+  GeneratedDocumentsLayout,
   HistoryLayout,
   SettingsLayout,
 } from '@/layouts/AppLayout'
@@ -12,6 +13,7 @@ import { AnalysisPage } from '@/pages/Analysis'
 import { ConsultationPage } from '@/pages/Consultation'
 import { DashboardPage } from '@/pages/Dashboard'
 import { DocumentsPage } from '@/pages/Documents'
+import { GeneratedDocumentsPage } from '@/pages/GeneratedDocuments'
 import { HistoryPage } from '@/pages/History'
 import { LoginPage } from '@/pages/Login'
 import { SettingsPage } from '@/pages/Settings'
@@ -34,6 +36,13 @@ export default function App() {
 
           <Route element={<DocumentsLayout />}>
             <Route path="/documents" element={<DocumentsPage />} />
+          </Route>
+
+          <Route element={<GeneratedDocumentsLayout />}>
+            <Route
+              path="/generated-documents"
+              element={<GeneratedDocumentsPage />}
+            />
           </Route>
 
           <Route element={<AnalysisLayout />}>

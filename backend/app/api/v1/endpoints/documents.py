@@ -85,11 +85,16 @@ async def list_documents(
     service: DocumentService = Depends(get_document_service),
     current_user: User = Depends(get_current_user),
 ) -> DocumentListResponse:
-    documents, total = await service.list_documents(
+    documents, total, scores = await service.list_documents(
         user_id=current_user.id, skip=skip, limit=limit
     )
     return DocumentListResponse(
-        items=[DocumentResponse.model_validate(doc) for doc in documents],
+        items=[
+            DocumentResponse.model_validate(doc).model_copy(
+                update={"analysis_score": scores.get(doc.id)}
+            )
+            for doc in documents
+        ],
         total=total,
     )
 

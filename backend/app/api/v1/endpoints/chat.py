@@ -3,7 +3,7 @@
 import asyncio
 import json
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import Response, StreamingResponse
@@ -14,14 +14,18 @@ from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.user import User
+from app.models.generated_document import GeneratedDocumentKind
 from app.graphs.rag_graph import build_rag_graph
 from app.schemas.chat import (
     ChatDocumentPdfRequest,
     ChatDocumentResponse,
+    ChatJobCreateRequest,
+    ChatJobCreateResponse,
+    ChatJobStatusResponse,
     ChatQueryRequest,
     ChatQueryResponse,
 )
-from app.services.pdf import render_html_to_pdf
+from app.services.pdf import brand_report_html, render_html_to_pdf
 from app.schemas.conversation import (
     ConversationCreateRequest,
     ConversationListResponse,
@@ -31,8 +35,11 @@ from app.schemas.conversation import (
     MessageResponse,
 )
 from app.services.conversation import ConversationService
+from app.services.chat_job import get_chat_job_store
 from app.services.generator import GeneratorService
+from app.services.generated_document import GeneratedDocumentService
 from app.services.langfuse_service import get_langfuse_service
+from app.tasks.chat import process_chat_job_task
 
 logger = get_logger(__name__)
 
@@ -225,6 +232,109 @@ async def chat_query(
 
 
 @router.post(
+    "/jobs",
+    response_model=ChatJobCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start a reconnectable background chat generation",
+)
+async def create_chat_job(
+    body: ChatJobCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> ChatJobCreateResponse:
+    """Queue generation independently from the browser's HTTP connection."""
+    store = get_chat_job_store()
+    job_id = uuid4()
+    payload = body.model_dump(mode="json", exclude={"mode"})
+    await store.create(
+        str(job_id),
+        user_id=current_user.id,
+        mode=body.mode,
+    )
+    try:
+        result = await asyncio.to_thread(
+            process_chat_job_task.delay,
+            str(job_id),
+            str(current_user.id),
+            body.mode,
+            payload,
+        )
+        await store.set_task_id(str(job_id), result.id)
+    except Exception as exc:
+        logger.exception("Could not queue chat job job_id=%s", job_id)
+        await store.mark_failed(
+            str(job_id),
+            "La réponse n'a pas pu être démarrée. Veuillez réessayer.",
+        )
+        raise AppError(
+            "La réponse n'a pas pu être démarrée. Veuillez réessayer.",
+            status_code=503,
+            code="chat_job_enqueue_failed",
+            retryable=True,
+        ) from exc
+    return ChatJobCreateResponse(job_id=job_id, status="queued")
+
+
+@router.get(
+    "/jobs/{job_id}",
+    response_model=ChatJobStatusResponse,
+    summary="Get a background chat job status",
+)
+async def get_chat_job(
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> ChatJobStatusResponse:
+    store = get_chat_job_store()
+    meta = await store.get_meta_for_user(str(job_id), user_id=current_user.id)
+    _events, event_count = await store.get_events(str(job_id))
+    return ChatJobStatusResponse(
+        job_id=job_id,
+        mode=meta["mode"],
+        status=meta["status"],
+        event_count=event_count,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/stream",
+    summary="Stream or resume a background chat response",
+)
+async def stream_chat_job(
+    job_id: UUID,
+    after: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    store = get_chat_job_store()
+    await store.get_meta_for_user(str(job_id), user_id=current_user.id)
+
+    async def event_source():
+        cursor = after
+        while True:
+            events, cursor = await store.get_events(str(job_id), after=cursor)
+            for event in events:
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+
+            meta = await store.get_meta_for_user(
+                str(job_id),
+                user_id=current_user.id,
+            )
+            if meta["status"] in {"completed", "failed"} and not events:
+                break
+            if not events:
+                yield ": keepalive\n\n"
+                await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post(
     "/document",
     response_model=ChatDocumentResponse,
     summary="Generate a grounded document (HTML, printable to PDF)",
@@ -238,6 +348,7 @@ async def chat_query(
 async def chat_document(
     body: ChatQueryRequest,
     generator: GeneratorService = Depends(get_generator_service),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChatDocumentResponse:
     result = await generator.generate_document(
@@ -249,7 +360,29 @@ async def chat_document(
         max_tokens=body.max_tokens,
         document_id=body.document_id,
     )
-    return ChatDocumentResponse.model_validate(result)
+    result["html"] = brand_report_html(result["html"])
+    pdf_bytes = await asyncio.to_thread(render_html_to_pdf, result["html"])
+    title = f"Rapport — {body.question.strip()[:100]}"
+    source_ids = {
+        UUID(str(source["document_id"]))
+        for source in result.get("sources", [])
+        if source.get("document_id")
+    }
+    source_document_id = body.document_id or (
+        next(iter(source_ids)) if len(source_ids) == 1 else None
+    )
+    generated = await GeneratedDocumentService(db).save_pdf(
+        pdf_bytes,
+        user_id=current_user.id,
+        source_document_id=source_document_id,
+        title=title,
+        filename=f"{title}.pdf",
+        kind=GeneratedDocumentKind.CHAT_REPORT,
+        question=body.question,
+    )
+    return ChatDocumentResponse.model_validate(
+        {**result, "generated_document_id": generated.id}
+    )
 
 
 def _safe_pdf_filename(name: str | None) -> str:
@@ -271,13 +404,29 @@ def _safe_pdf_filename(name: str | None) -> str:
         "disabled during rendering. Returns application/pdf as an attachment."
     ),
 )
-async def chat_document_pdf(body: ChatDocumentPdfRequest) -> Response:
+async def chat_document_pdf(
+    body: ChatDocumentPdfRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
     pdf_bytes = await asyncio.to_thread(render_html_to_pdf, body.html)
     filename = _safe_pdf_filename(body.filename)
+    generated = await GeneratedDocumentService(db).save_pdf(
+        pdf_bytes,
+        user_id=current_user.id,
+        source_document_id=body.source_document_id,
+        title=body.title,
+        filename=filename,
+        kind=body.kind,
+        question=body.question,
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Generated-Document-Id": str(generated.id),
+        },
     )
 
 
